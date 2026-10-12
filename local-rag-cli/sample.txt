@@ -1,0 +1,23 @@
+Project Apex: Operational Overview & Core Guidelines
+
+1. Introduction
+Project Apex is an internal knowledge management initiative launched on January 15, 2026.Its primary goal is to centralize engineering documentation, security protocols, and team rosters into a searchable digital repository.
+
+2. Key Personnel & Roles
+- Project Lead: Dr. Elena Rostova (elena.rostova@apex-internal.dev)
+- Lead Infrastructure Engineer: Marcus Vance (marcus.vance@apex-internal.dev)
+- Security Compliance Officer: Sarah Jenkins (sarah.jenkins@apex-internal.dev)
+
+3. System Architecture & Tech Stack
+- The primary backend service runs on Python 3.12 using FastAPI.
+- Local AI and embedding tasks are handled offline via Ollama running Llama 3.2 and nomic-embed-text.
+- Vector storage is managed locally using ChromaDB, configured with a default chunk size of 512 characters and an overlap of 50 characters.
+
+4. Security and Access Protocols
+- All local vector databases must remain unexposed to public network interfaces.
+- API keys and service tokens are rotated strictly every 90 days.
+- In the event of a suspected data leak, Sarah Jenkins must be notified within 15 minutes of detection.
+
+5. Support & Maintenance Schedule
+- Routine maintenance windows occur every Sunday from 02:00 UTC to 04:00 UTC.
+- For emergency bug reports outside maintenance hours, ping the #apex-alerts channel on the internal matrix server.

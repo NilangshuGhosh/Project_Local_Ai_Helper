@@ -1,0 +1,16 @@
+@"
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+
+# Local secrets and settings
+.env
+"@ | Set-Content .gitignore
+
+git init
+git status --short
