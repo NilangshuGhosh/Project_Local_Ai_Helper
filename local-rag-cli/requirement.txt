@@ -1,0 +1,15 @@
+local-rag/
+│
+├── core/
+│   ├── __init__.py
+│   ├── config.py         # Paths, embedding models, constants
+│   ├── database.py       # ChromaDB operations (list, delete, ingest)
+│   ├── document_ops.py   # Loaders (PDF, TXT, CPP) & chunking
+│   └── rag_engine.py     # Chains, prompts, Ollama streaming
+│
+├── tui/
+│   ├── __init__.py
+│   └── menu.py           # Interactive prompts & UI views
+│
+├── main.py               # Entry point (launches interactive UI)
+└── requirements.txt
