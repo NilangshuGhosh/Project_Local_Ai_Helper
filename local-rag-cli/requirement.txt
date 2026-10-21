@@ -3,13 +3,66 @@ local-rag/
 ├── core/
 │   ├── __init__.py
 │   ├── config.py         # Paths, embedding models, constants
-│   ├── database.py       # ChromaDB operations (list, delete, ingest)
-│   ├── document_ops.py   # Loaders (PDF, TXT, CPP) & chunking
+│   ├── database.py       # ChromaDB operations (list, delete, ingest, selective delete)
+│   ├── document_ops.py   # Loaders (PDF, TXT, CPP) & boundary-aware chunking
+│   ├── health.py         # Ollama daemon & model readiness check
 │   └── rag_engine.py     # Chains, prompts, Ollama streaming
 │
 ├── tui/
 │   ├── __init__.py
-│   └── menu.py           # Interactive prompts & UI views
+│   └── menu.py           # Interactive prompts, multi-doc CRUD, storage views
 │
 ├── main.py               # Entry point (launches interactive UI)
 └── requirements.txt
+
+
+================================================================================
+MULTI-DOCUMENT SESSION & DYNAMIC CRUD ARCHITECTURE
+================================================================================
+
+1. Multi-Document Session Workspace:
+------------------------------------
+In this architecture, a ChromaDB collection is not limited to a single file.
+Each session functions as a multi-document workspace containing PDFs, code files,
+and plain text documents simultaneously.
+
+                       ┌──────────────────────────────────────────────┐
+                       │        SESSION COLLECTION (e.g. 'Project')   │
+                       └──────────────────────┬───────────────────────┘
+                                              │
+          ┌───────────────────────────────────┼──────────────────────────────────┐
+          │                                   │                                  │
+          ▼                                   ▼                                  ▼
+  [ Document A: spec.pdf ]           [ Document B: guide.pdf ]          [ Document C: main.py ]
+   ├── Chunk 1 (Page 1)               ├── Chunk 1 (Page 1)               ├── Chunk 1 (Class)
+   ├── Chunk 2 (Page 1)               ├── Chunk 2 (Page 2)               └── Chunk 2 (Function)
+   └── Chunk 3 (Page 2)               └── Chunk 3 (Page 2)
+
+2. Metadata-Driven Isolation & Collision Prevention:
+----------------------------------------------------
+Every indexed chunk is tagged with immutable metadata:
+- source_file  : Normalized absolute path (e.g. C:/Users/Docs/spec.pdf)
+- file_name    : Basename for human display (spec.pdf)
+- file_type    : Content category ('pdf' | 'code' | 'text')
+- page         : 1-indexed page number (isolated strictly per page)
+- chunk_index  : Sequential chunk counter across document
+- paragraph_idx: Sequential paragraph counter within page
+- char_count   : Verified text length
+
+* Path-Hash ID Addressing:
+  To prevent collisions when two documents from different folders have the same
+  filename (e.g. /Desktop/notes.txt vs /Downloads/notes.txt), vector IDs use:
+  ID = {session_name}_{basename}_{path_hash8}_c{chunk_index}
+
+3. Dynamic CRUD Operations Lifecycle:
+-------------------------------------
+- Multi-Doc Append : User selects an existing session during ingest; new chunks are
+                     appended with file-level identity.
+- Smart Upsert     : When re-ingesting an updated file, ChromaDB automatically purges
+                     stale chunks matching that source_file before indexing new splits,
+                     ensuring ZERO duplicate chunks.
+- Selective Purge  : col.delete(where={"source_file": path}) surgically removes ONLY
+                     that document's vectors while keeping all other documents intact.
+- Storage Vacuum   : SQLite WAL checkpoint (PRAGMA wal_checkpoint(TRUNCATE)) and
+                     VACUUM are executed after deletes to guarantee immediate physical
+                     disk reclamation without storage bloat.

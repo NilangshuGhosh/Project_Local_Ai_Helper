@@ -7,6 +7,7 @@ from tui.menu import (
     handle_list_sessions,
     handle_ingest,
     handle_chat,
+    handle_manage_session_docs,
     handle_delete,
     handle_storage_health,
 )
@@ -28,9 +29,10 @@ def main():
                 "What would you like to do?",
                 choices=[
                     "Chat with a Document",
-                    "Ingest New Document",
+                    "Ingest Document (New or Existing Session)",
+                    "Manage Documents in a Session (Inspect / Remove / Add)",
                     "List Active Sessions",
-                    "Delete a Session (with physical cleanup)",
+                    "Delete (Session or Document)",
                     "Storage & System Health",
                     "Exit"
                 ]
@@ -41,11 +43,13 @@ def main():
 
         if action == "Chat with a Document":
             handle_chat()
-        elif action == "Ingest New Document":
+        elif action == "Ingest Document (New or Existing Session)":
             handle_ingest()
+        elif action == "Manage Documents in a Session (Inspect / Remove / Add)":
+            handle_manage_session_docs()
         elif action == "List Active Sessions":
             handle_list_sessions()
-        elif action == "Delete a Session (with physical cleanup)":
+        elif action == "Delete (Session or Document)":
             handle_delete()
         elif action == "Storage & System Health":
             handle_storage_health()

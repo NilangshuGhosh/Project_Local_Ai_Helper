@@ -5,6 +5,7 @@ import time
 import shutil
 import sqlite3
 import re
+import hashlib
 import warnings
 from typing import List, Dict, Any, Optional
 
@@ -39,10 +40,24 @@ def _remove_readonly(func, path, excinfo):
         pass
 
 
+def _vacuum_and_checkpoint():
+    """Flushes SQLite WAL logs and reclaims freed disk space via VACUUM."""
+    db_file = os.path.join(DB_DIR, "chroma.sqlite3")
+    if not os.path.exists(db_file):
+        return
+    try:
+        conn = sqlite3.connect(db_file)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")
+        conn.close()
+    except Exception:
+        pass
+
+
 def cleanup_orphaned_segments() -> int:
     """
     Physically removes orphaned segment directories from chroma_db on disk
-    and reclaims SQLite disk space via VACUUM.
+    and flushes/vacuums SQLite storage.
     
     Returns the number of deleted orphan directories.
     """
@@ -82,35 +97,77 @@ def cleanup_orphaned_segments() -> int:
                         except Exception:
                             time.sleep(0.15)
 
-    try:
-        conn = sqlite3.connect(db_file)
-        conn.execute("VACUUM")
-        conn.close()
-    except Exception:
-        pass
-
+    _vacuum_and_checkpoint()
     return deleted_count
+
+
+def _sanitize_id(text: str) -> str:
+    """Sanitizes strings to be safe for vector ID usage."""
+    return re.sub(r'[^a-zA-Z0-9_\-\.]', '_', text)
+
+
+def _path_hash(path: str) -> str:
+    """Creates a short 8-char hash of full path to uniquely identify identical filenames across directories."""
+    norm = os.path.abspath(path).replace("\\", "/").lower()
+    return hashlib.md5(norm.encode("utf-8")).hexdigest()[:8]
 
 
 def get_session_file_summary(session_name: str) -> List[Dict[str, Any]]:
     """
-    Returns a breakdown of files contained within a session collection:
-    [{'file_name': 'manual.pdf', 'chunk_count': 12, 'file_type': 'pdf'}]
+    Returns a breakdown of distinct files contained within a session collection.
+    Differentiates files with the same basename from different folder locations.
     """
     client = get_chroma_client()
     try:
         col = client.get_collection(session_name)
         data = col.get(include=["metadatas"])
-        summary = {}
+        
+        # Group by source_file (unique absolute path)
+        files_by_path = {}
         for meta in data.get("metadatas", []):
             if not meta:
                 continue
-            fname = meta.get("file_name", "unknown")
+            src_path = meta.get("source_file", meta.get("file_name", "unknown"))
+            fname = meta.get("file_name", os.path.basename(src_path))
             ftype = meta.get("file_type", "unknown")
-            if fname not in summary:
-                summary[fname] = {"file_name": fname, "chunk_count": 0, "file_type": ftype}
-            summary[fname]["chunk_count"] += 1
-        return list(summary.values())
+            
+            if src_path not in files_by_path:
+                files_by_path[src_path] = {
+                    "file_name": fname,
+                    "source_file": src_path,
+                    "file_type": ftype,
+                    "chunk_count": 0,
+                    "pages": set(),
+                }
+            files_by_path[src_path]["chunk_count"] += 1
+            if "page" in meta:
+                files_by_path[src_path]["pages"].add(meta["page"])
+
+        # Format display names (disambiguate if duplicate basenames exist)
+        basename_counts = {}
+        for item in files_by_path.values():
+            bn = item["file_name"]
+            basename_counts[bn] = basename_counts.get(bn, 0) + 1
+
+        results = []
+        for src_path, item in files_by_path.items():
+            if basename_counts[item["file_name"]] > 1:
+                # Add parent folder name for disambiguation
+                parent_dir = os.path.basename(os.path.dirname(src_path))
+                display = f"{item['file_name']} [{parent_dir}]"
+            else:
+                display = item["file_name"]
+
+            results.append({
+                "file_name": item["file_name"],
+                "source_file": src_path,
+                "display_name": display,
+                "file_type": item["file_type"],
+                "chunk_count": item["chunk_count"],
+                "total_pages": len(item["pages"]) if item["pages"] else 1
+            })
+
+        return sorted(results, key=lambda x: x["display_name"].lower())
     except Exception:
         return []
     finally:
@@ -123,7 +180,7 @@ def get_session_file_summary(session_name: str) -> List[Dict[str, Any]]:
 def list_sessions() -> List[Dict[str, Any]]:
     """
     Returns a list of dicts:
-    [{'name': col.name, 'count': col.count(), 'files': file_count}]
+    [{'name': col.name, 'count': col.count(), 'file_count': int}]
     """
     client = get_chroma_client()
     try:
@@ -131,11 +188,10 @@ def list_sessions() -> List[Dict[str, Any]]:
         sessions = []
         for col in collections:
             count = col.count()
-            # Inspect metadata to get distinct file count
             files_count = 0
             try:
                 data = col.get(include=["metadatas"])
-                distinct_files = {m.get("file_name") for m in data.get("metadatas", []) if m and "file_name" in m}
+                distinct_files = {m.get("source_file", m.get("file_name")) for m in data.get("metadatas", []) if m}
                 files_count = len(distinct_files)
             except Exception:
                 pass
@@ -155,7 +211,7 @@ def list_sessions() -> List[Dict[str, Any]]:
 
 def delete_session(session_name: str) -> bool:
     """
-    Deletes a session from ChromaDB logically AND physically purges its segment folders
+    Deletes an entire session from ChromaDB logically AND physically purges its segment folders
     from the filesystem, preventing ghost data accumulation.
     """
     client = get_chroma_client()
@@ -181,31 +237,125 @@ def delete_session(session_name: str) -> bool:
         return False
 
 
-def _sanitize_id(text: str) -> str:
-    """Sanitizes strings to be safe for vector ID usage."""
-    return re.sub(r'[^a-zA-Z0-9_\-\.]', '_', text)
+def delete_file_from_session(session_name: str, file_identifier: str, by_path: bool = True) -> Dict[str, Any]:
+    """
+    Selectively removes a specific document from a multi-file session without deleting the session.
+    
+    Args:
+        session_name: The session collection name.
+        file_identifier: The absolute source_file path or file_name to remove.
+        by_path: If True, matches against metadata 'source_file' (avoids collisions).
+                 If False, matches against metadata 'file_name'.
+    
+    Returns:
+        Dict with deleted_chunks, remaining_chunks, session_deleted (if session became empty).
+    """
+    client = get_chroma_client()
+    try:
+        col = client.get_collection(session_name)
+        filter_key = "source_file" if by_path else "file_name"
+        
+        # Check matching chunks count
+        existing = col.get(where={filter_key: file_identifier})
+        matching_ids = existing.get("ids", [])
+        
+        if not matching_ids:
+            # Fallback check against the other key
+            alt_key = "file_name" if by_path else "source_file"
+            existing = col.get(where={alt_key: file_identifier})
+            matching_ids = existing.get("ids", [])
+            filter_key = alt_key
+
+        if not matching_ids:
+            return {
+                "success": False,
+                "deleted_chunks": 0,
+                "remaining_chunks": col.count(),
+                "session_deleted": False,
+                "error": f"No chunks found matching {file_identifier}"
+            }
+
+        col.delete(ids=matching_ids)
+        remaining = col.count()
+        session_deleted = False
+
+        # If no chunks remain in the entire collection, purge the session collection
+        if remaining == 0:
+            client.delete_collection(session_name)
+            session_deleted = True
+
+        try:
+            client.clear_system_cache()
+            client.close()
+        except Exception:
+            pass
+        del client
+        gc.collect()
+
+        if session_deleted:
+            cleanup_orphaned_segments()
+        else:
+            _vacuum_and_checkpoint()
+
+        return {
+            "success": True,
+            "deleted_chunks": len(matching_ids),
+            "remaining_chunks": remaining,
+            "session_deleted": session_deleted,
+            "error": None
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "deleted_chunks": 0,
+            "remaining_chunks": -1,
+            "session_deleted": False,
+            "error": str(e)
+        }
 
 
-def ingest_document(file_path: str, session_name: str, splits) -> int:
+def ingest_document(file_path: str, session_name: str, splits) -> Dict[str, Any]:
     """
     Stores document splits under a named collection atomically with deterministic IDs.
-    If an error occurs mid-ingestion, rolls back partially created data
-    so the vector database does not get corrupted.
     
-    Returns the number of chunks successfully indexed.
+    Smart Upsert Behavior:
+    If this exact file (by source_file) was already ingested in the session, its old chunks
+    are purged before inserting the new ones, preventing duplicate or conflicting chunks.
+    
+    Handles identical filenames across different directories using path hashing.
+    
+    Returns:
+        Dict with status ('created' or 'updated'), chunk_count, replaced_chunks.
     """
     client = get_chroma_client()
     existing_collections = [c.name for c in client.list_collections()]
     is_new_collection = session_name not in existing_collections
 
-    # Generate traceable, deterministic chunk IDs
+    norm_path = os.path.abspath(file_path).replace("\\", "/")
+    path_sig = _path_hash(norm_path)
     file_base = os.path.basename(file_path)
+
+    # Deterministic, collision-free chunk IDs
     chunk_ids = [
-        f"{_sanitize_id(session_name)}_{_sanitize_id(doc.metadata.get('file_name', file_base))}_chunk_{doc.metadata.get('chunk_index', i+1)}"
+        f"{_sanitize_id(session_name)}_{_sanitize_id(file_base)}_{path_sig}_c{doc.metadata.get('chunk_index', i+1)}"
         for i, doc in enumerate(splits)
     ]
 
+    replaced_chunks = 0
+    status = "created"
+
     try:
+        # If collection exists, check if this file was already ingested and purge stale chunks
+        if not is_new_collection:
+            col = client.get_collection(session_name)
+            existing_match = col.get(where={"source_file": norm_path})
+            old_ids = existing_match.get("ids", [])
+            if old_ids:
+                col.delete(ids=old_ids)
+                replaced_chunks = len(old_ids)
+                status = "updated"
+
+        # Index new splits
         Chroma.from_documents(
             documents=splits,
             ids=chunk_ids,
@@ -213,7 +363,15 @@ def ingest_document(file_path: str, session_name: str, splits) -> int:
             persist_directory=DB_DIR,
             collection_name=session_name,
         )
-        return len(splits)
+
+        _vacuum_and_checkpoint()
+
+        return {
+            "status": status,
+            "chunk_count": len(splits),
+            "replaced_chunks": replaced_chunks,
+            "session_name": session_name
+        }
     except Exception as e:
         if is_new_collection:
             try:

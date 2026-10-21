@@ -7,6 +7,7 @@ from rich.panel import Panel
 from core.database import (
     list_sessions,
     delete_session,
+    delete_file_from_session,
     ingest_document,
     get_retriever,
     get_database_stats,
@@ -45,14 +46,45 @@ def handle_list_sessions():
     )
 
 
-def handle_ingest():
+def handle_ingest(target_session: str = None):
+    """
+    Ingests a new document, allowing the user to create a new session
+    or add to an existing multi-document session.
+    """
     file_path = questionary.path("Enter path to file (PDF, TXT, PY, CPP, JS, MD, etc.):").ask()
     if not file_path or not os.path.exists(file_path):
         console.print("[red]Invalid file path or file does not exist.[/red]\n")
         return
 
-    default_name = os.path.splitext(os.path.basename(file_path))[0].replace(" ", "_")
-    session_name = questionary.text("Name this knowledge session:", default=default_name).ask()
+    file_name = os.path.basename(file_path)
+
+    # Determine session name
+    if target_session:
+        session_name = target_session
+    else:
+        existing_sessions = [s["name"] for s in list_sessions()]
+        if existing_sessions:
+            dest_choice = questionary.select(
+                "Where would you like to ingest this document?",
+                choices=[
+                    "Create a New Session",
+                    "Add to an Existing Session"
+                ]
+            ).ask()
+
+            if dest_choice == "Add to an Existing Session":
+                session_name = questionary.select(
+                    "Select target session:",
+                    choices=existing_sessions
+                ).ask()
+                if not session_name:
+                    return
+            else:
+                default_name = os.path.splitext(file_name)[0].replace(" ", "_")
+                session_name = questionary.text("Name this knowledge session:", default=default_name).ask()
+        else:
+            default_name = os.path.splitext(file_name)[0].replace(" ", "_")
+            session_name = questionary.text("Name this knowledge session:", default=default_name).ask()
 
     if not session_name or not session_name.strip():
         console.print("[yellow]Ingestion cancelled: session name cannot be empty.[/yellow]\n")
@@ -60,17 +92,109 @@ def handle_ingest():
 
     session_name = session_name.strip()
 
-    with console.status(f"[cyan]Analyzing, splitting, and embedding '{file_path}'...[/cyan]"):
+    with console.status(f"[cyan]Analyzing, splitting, and embedding '{file_name}' into '{session_name}'...[/cyan]"):
         try:
             splits = load_and_split(file_path)
-            chunk_count = ingest_document(file_path, session_name, splits)
-            console.print(
-                f"[bold green]✔ Successfully indexed {chunk_count} chunks with rich metadata under session '{session_name}'![/bold green]\n"
-            )
+            res = ingest_document(file_path, session_name, splits)
+            
+            if res["status"] == "updated":
+                console.print(
+                    f"[bold green]✔ Updated '{file_name}' in session '{session_name}'![/bold green] "
+                    f"[dim](Replaced {res['replaced_chunks']} stale chunks with {res['chunk_count']} new chunks)[/dim]\n"
+                )
+            else:
+                console.print(
+                    f"[bold green]✔ Added '{file_name}' to session '{session_name}' ({res['chunk_count']} chunks indexed)![/bold green]\n"
+                )
         except KeyboardInterrupt:
             console.print("\n[yellow]Ingestion cancelled by user.[/yellow]\n")
         except Exception as e:
             console.print(f"[red]Error during ingestion: {e}[/red]\n")
+
+
+def handle_manage_session_docs():
+    """
+    Interactive manager to inspect, add, or selectively remove documents
+    within a specific session.
+    """
+    sessions = list_sessions()
+    if not sessions:
+        console.print("[yellow]No active knowledge sessions found.[/yellow]\n")
+        return
+
+    choices = [s["name"] for s in sessions] + ["< Back"]
+    session_name = questionary.select("Select a session to inspect/manage:", choices=choices).ask()
+
+    if not session_name or session_name == "< Back":
+        return
+
+    files = get_session_file_summary(session_name)
+    if not files:
+        console.print(f"[yellow]No file metadata records found in session '{session_name}'.[/yellow]\n")
+        return
+
+    table = Table(title=f"Documents in Session: {session_name}")
+    table.add_column("Document Name", style="cyan", no_wrap=True)
+    table.add_column("Type", style="magenta", justify="center")
+    table.add_column("Pages", style="blue", justify="center")
+    table.add_column("Chunks", style="green", justify="right")
+    table.add_column("Path", style="dim")
+
+    for f in files:
+        table.add_row(
+            f["display_name"],
+            f["file_type"],
+            str(f.get("total_pages", 1)),
+            str(f["chunk_count"]),
+            f["source_file"]
+        )
+
+    console.print(table)
+    console.print()
+
+    sub_action = questionary.select(
+        f"Manage documents in '{session_name}':",
+        choices=[
+            "Remove a document from this session",
+            "Add another document to this session",
+            "< Back to Main Menu"
+        ]
+    ).ask()
+
+    if sub_action == "Remove a document from this session":
+        file_choices = [
+            questionary.Choice(
+                title=f"{f['display_name']} ({f['chunk_count']} chunks)",
+                value=f["source_file"]
+            )
+            for f in files
+        ] + [questionary.Choice(title="< Cancel", value=None)]
+
+        target_file = questionary.select("Select file to remove:", choices=file_choices).ask()
+        if not target_file:
+            return
+
+        confirm = questionary.confirm(f"Remove '{os.path.basename(target_file)}' from session '{session_name}'?").ask()
+        if confirm:
+            with console.status(f"[cyan]Removing document and cleaning chunks...[/cyan]"):
+                del_res = delete_file_from_session(session_name, target_file, by_path=True)
+
+            if del_res["success"]:
+                if del_res["session_deleted"]:
+                    console.print(
+                        f"[bold green]✔ Removed '{os.path.basename(target_file)}'.[/bold green] "
+                        f"[yellow]Session '{session_name}' had 0 remaining files and was purged.[/yellow]\n"
+                    )
+                else:
+                    console.print(
+                        f"[bold green]✔ Successfully removed '{os.path.basename(target_file)}'![/bold green] "
+                        f"[dim]Deleted {del_res['deleted_chunks']} chunks. {del_res['remaining_chunks']} chunks remaining in session.[/dim]\n"
+                    )
+            else:
+                console.print(f"[red]Failed to remove file: {del_res['error']}[/red]\n")
+
+    elif sub_action == "Add another document to this session":
+        handle_ingest(target_session=session_name)
 
 
 def handle_chat():
@@ -97,7 +221,7 @@ def handle_chat():
     # Display session file summary
     files_summary = get_session_file_summary(session_name)
     if files_summary:
-        file_badges = ", ".join([f"[cyan]{f['file_name']}[/cyan] ({f['chunk_count']} chunks)" for f in files_summary])
+        file_badges = ", ".join([f"[cyan]{f['display_name']}[/cyan] ({f['chunk_count']} chunks)" for f in files_summary])
         console.print(f"[bold dim]Documents in session:[/bold dim] {file_badges}")
 
     retriever = get_retriever(session_name)
@@ -129,14 +253,30 @@ def handle_delete():
         console.print("[yellow]No sessions to delete.[/yellow]\n")
         return
 
+    del_mode = questionary.select(
+        "What would you like to delete?",
+        choices=[
+            "Delete an Entire Session (and all its files)",
+            "Remove a Specific Document from a Session",
+            "< Cancel"
+        ]
+    ).ask()
+
+    if del_mode == "< Cancel" or not del_mode:
+        return
+
+    if del_mode == "Remove a Specific Document from a Session":
+        handle_manage_session_docs()
+        return
+
     choices = [s["name"] for s in sessions]
-    session_name = questionary.select("Select session to delete:", choices=choices).ask()
+    session_name = questionary.select("Select session to delete permanently:", choices=choices).ask()
 
     if not session_name:
         return
 
     confirm = questionary.confirm(
-        f"Permanently delete '{session_name}' and physically remove its vector files from disk?"
+        f"Permanently delete session '{session_name}' and physically remove all its vector files from disk?"
     ).ask()
 
     if confirm:
