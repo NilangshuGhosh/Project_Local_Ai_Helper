@@ -1,0 +1,13 @@
+1) also clarify one thing that if two different merge.pdf is there and 
+there location is different say one belonging to /desktop other is in /download then 
+both will have same baseName ,
+now if user tries to push both of this in a single chat will it be possible to do it,
+or one will replace the other(What to be done here)?
+2)It is taking too much storage in disk two pdf and text file of combine 24kB is 
+taking 99MB ssession space in the disk(asked 5-7 questions).
+3)Sometimes I see like asking about sigmoid function from 
+"C:\Users\NILANGSHU\Downloads\rag_test_facts.pdf"
+is giving some extra info not present in pdf,in some cases I see it is giving more than
+expected answers.
+4)It is taking a good amount while ingesting a 5 page doc it was fast but
+ reply is still a bit slow.
