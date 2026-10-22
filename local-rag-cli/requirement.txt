@@ -2,15 +2,16 @@ local-rag/
 │
 ├── core/
 │   ├── __init__.py
-│   ├── config.py         # Paths, embedding models, constants
+│   ├── config.py         # Paths, embedding models, constants, performance guardrails
 │   ├── database.py       # ChromaDB operations (list, delete, ingest, selective delete)
 │   ├── document_ops.py   # Loaders (PDF, TXT, CPP) & boundary-aware chunking
+│   ├── citations.py      # Source verification table, excerpt preview, Windows file launch
 │   ├── health.py         # Ollama daemon & model readiness check
-│   └── rag_engine.py     # Chains, prompts, Ollama streaming
+│   └── rag_engine.py     # Chains, prompts, Ollama streaming, balanced zero-extrapolation
 │
 ├── tui/
 │   ├── __init__.py
-│   └── menu.py           # Interactive prompts, multi-doc CRUD, storage views
+│   └── menu.py           # Interactive prompts, multi-doc CRUD, real-time typewriter, slash cmds
 │
 ├── main.py               # Entry point (launches interactive UI)
 └── requirements.txt
@@ -66,3 +67,44 @@ Every indexed chunk is tagged with immutable metadata:
 - Storage Vacuum   : SQLite WAL checkpoint (PRAGMA wal_checkpoint(TRUNCATE)) and
                      VACUUM are executed after deletes to guarantee immediate physical
                      disk reclamation without storage bloat.
+
+
+================================================================================
+SOURCE CITATIONS, GROUNDING & VERIFICATION ARCHITECTURE (PHASE 4)
+================================================================================
+
+1. Balanced Grounding & Zero-Extrapolation Prompting:
+-----------------------------------------------------
+To prevent hallucination while maintaining conversational helpfulness, the system
+prompt enforces balanced context constraints:
+- "Answer BASED on the provided context. Ground every factual claim directly in the context."
+- "If the information is partially relevant, use it and be explicit about what the context does and does not say."
+- "Only if there is absolutely nothing related to the question, say so clearly: 'I cannot find that information in the document.'"
+- "Do NOT invent data, formulas, or outside details that are not in the context."
+- "CITATION REQUIREMENT: After every factual statement, append its source citation tag in brackets (e.g. [Source 1], [Source 2])."
+
+2. Grounded "Verified Sources" Panel (core/citations.py):
+---------------------------------------------------------
+Immediately following each streamed answer, a structured table renders the exact
+sources used:
+- Tag         : [Source 1], [Source 2], etc.
+- Location    : Document filename, 1-indexed page (for PDFs), paragraph number.
+- Excerpt     : Clean preview snippet showing the exact text retrieved from the document.
+
+3. Windows Desktop Cross-Verification (Interactive Slash Commands):
+-------------------------------------------------------------------
+Users can interact with citations directly inside the chat loop:
+- /open <N>    : Executes Windows `os.startfile()` to launch the exact PDF or text
+                 document in the user's default Windows application (Adobe Acrobat,
+                 Edge, or Notepad) for instant cross-verification.
+- /source <N>  : Opens a detailed panel displaying the complete, uncropped chunk text,
+                 character count, and full disk path.
+- /sources     : Re-prints the full source verification table for the previous answer.
+- /help        : Displays all interactive commands.
+
+4. Prefill Latency UX (Live Spinner to Typewriter Transition):
+--------------------------------------------------------------
+During prompt prefill and vector retrieval (~10s on CPU), a live animated Rich dots
+spinner keeps the user informed: "Searching documents & preparing response...".
+The exact millisecond token #1 arrives, the spinner cleanly clears and switches
+seamlessly to real-time typewriter token streaming.

@@ -18,6 +18,11 @@ from core.database import (
 from core.document_ops import load_and_split
 from core.rag_engine import stream_rag_response, build_chat_chain
 from core.health import display_health_banner, verify_system_readiness
+from core.citations import (
+    render_sources_panel,
+    open_source_file_in_windows,
+    display_full_source_detail,
+)
 
 console = Console()
 
@@ -227,7 +232,9 @@ def handle_chat():
 
     retriever = get_retriever(session_name)
 
-    console.print(f"[bold green]Connected to session '{session_name}'. Type 'exit' to quit.[/bold green]\n")
+    console.print(f"[bold green]Connected to session '{session_name}'.[/bold green] [dim](Type 'exit' to quit, '/help' for commands)[/dim]\n")
+
+    last_retrieved_docs = []
 
     while True:
         try:
@@ -238,6 +245,55 @@ def handle_chat():
 
         if not query or query.strip().lower() in ["exit", "quit"]:
             break
+
+        cleaned_query = query.strip()
+
+        # Handle interactive slash commands
+        if cleaned_query.lower() == "/help":
+            console.print(
+                "\n[bold cyan]Interactive Chat Commands:[/bold cyan]\n"
+                "  • [bold]/sources[/bold]     : Re-display the verified sources table for the last answer\n"
+                "  • [bold]/source <N>[/bold]  : View the complete uncropped text and metadata of Source N\n"
+                "  • [bold]/open <N>[/bold]    : Open Source N's file in your default Windows viewer\n"
+                "  • [bold]exit[/bold] or [bold]quit[/bold]: Return to the main menu\n"
+            )
+            continue
+
+        if cleaned_query.lower() == "/sources":
+            if last_retrieved_docs:
+                render_sources_panel(console, last_retrieved_docs)
+            else:
+                console.print("[yellow]No sources available yet. Ask a question first![/yellow]\n")
+            continue
+
+        if cleaned_query.lower().startswith("/source"):
+            parts = cleaned_query.split()
+            if len(parts) < 2 or not parts[1].isdigit():
+                console.print("[yellow]Usage: /source <number> (e.g. /source 1)[/yellow]\n")
+            else:
+                idx = int(parts[1])
+                if 1 <= idx <= len(last_retrieved_docs):
+                    display_full_source_detail(console, last_retrieved_docs[idx - 1], idx)
+                else:
+                    console.print(f"[red]Source [{idx}] out of range. Last answer cited {len(last_retrieved_docs)} source(s).[/red]\n")
+            continue
+
+        if cleaned_query.lower().startswith("/open"):
+            parts = cleaned_query.split()
+            if len(parts) < 2 or not parts[1].isdigit():
+                console.print("[yellow]Usage: /open <number> (e.g. /open 1)[/yellow]\n")
+            else:
+                idx = int(parts[1])
+                if 1 <= idx <= len(last_retrieved_docs):
+                    target_doc = last_retrieved_docs[idx - 1]
+                    success, msg = open_source_file_in_windows(target_doc)
+                    if success:
+                        console.print(f"[bold green]✔ {msg}[/bold green]\n")
+                    else:
+                        console.print(f"[red]{msg}[/red]\n")
+                else:
+                    console.print(f"[red]Source [{idx}] out of range. Last answer cited {len(last_retrieved_docs)} source(s).[/red]\n")
+            continue
 
         # Show animated spinner during document retrieval & prompt prefill
         stream = stream_rag_response(retriever, query)
@@ -282,6 +338,12 @@ def handle_chat():
                     gen_time = max(total_s - ttft, 0.05)
                     gen_tok_per_sec = round(tokens / gen_time, 1)
                     console.print(f"\n[dim]({tokens} tokens • TTFT: {ttft}s • Generation: {gen_tok_per_sec} tok/s • Total: {total_s}s)[/dim]\n")
+
+            # Render verified sources panel below response
+            if context_docs:
+                last_retrieved_docs = context_docs
+                render_sources_panel(console, context_docs)
+
         except KeyboardInterrupt:
             console.print("\n[yellow][Generation stopped by user][/yellow]\n")
         except Exception as e:

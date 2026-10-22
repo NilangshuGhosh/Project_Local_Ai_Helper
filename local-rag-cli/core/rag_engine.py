@@ -12,14 +12,16 @@ from langchain_core.prompts import ChatPromptTemplate
 
 from core.config import LLM_MODEL, OLLAMA_BASE_URL, MAX_CONTEXT_CHARS
 
-# Strict system prompt ensuring zero hallucination / zero extrapolation
+# Strict factual system prompt with balanced context handling and inline citation requirements
 SYSTEM_PROMPT_TEMPLATE = (
-    "You are a strict, factual local AI assistant. Answer the user's question using ONLY the provided Context below.\n\n"
+    "You are a strict, factual local AI assistant. Answer the user's question BASED on the provided Context below.\n\n"
     "CRITICAL OPERATIONAL RULES:\n"
-    "1. Rely strictly on the explicit facts directly mentioned in the Context.\n"
-    "2. If the answer cannot be found in the context, or is only partially mentioned, answer ONLY what is directly stated and explicitly state: 'I cannot find further information about that in the document.'\n"
-    "3. NEVER use outside or prior training knowledge. Do NOT extrapolate, speculate, or invent formulas, facts, or details not directly present in the context.\n"
-    "4. Keep the answer direct, factually grounded, and concise.\n\n"
+    "1. Answer BASED on the provided context. Ground every factual claim directly in the context.\n"
+    "2. If the context is partially relevant, use it and be explicit about what the context does and does not say.\n"
+    "3. Only if there is absolutely nothing related to the question in the context, say so clearly: 'I cannot find that information in the document.'\n"
+    "4. Do NOT invent data, formulas, or outside details that are not in the context.\n"
+    "5. CITATION REQUIREMENT: After every factual statement or answer, append its source citation tag in brackets, for example: [Source 1] or [Source 2]. Use ONLY the [Source N] tags provided in the context below.\n"
+    "6. Keep the answer direct, factually grounded, and concise.\n\n"
     "Context:\n{context}"
 )
 
@@ -47,15 +49,16 @@ def format_context_with_budget(docs: List[Document], max_chars: int = MAX_CONTEX
 
     for idx, doc in enumerate(docs, start=1):
         meta = doc.metadata or {}
-        file_name = meta.get("file_name", "Unknown File")
+        raw_source = meta.get("source_file") or meta.get("source", "")
+        file_name = meta.get("file_name") or (os.path.basename(raw_source) if raw_source else "Document")
         page = meta.get("page")
         para = meta.get("paragraph_idx")
 
         # Header tag
         if page is not None and meta.get("file_type") == "pdf":
-            header = f"[Source {idx}: {file_name} | Page {page} | ¶{para}]"
+            header = f"[Source {idx}: {file_name} | Page {page} | Para {para}]"
         elif para is not None:
-            header = f"[Source {idx}: {file_name} | ¶{para}]"
+            header = f"[Source {idx}: {file_name} | Para {para}]"
         else:
             header = f"[Source {idx}: {file_name}]"
 
