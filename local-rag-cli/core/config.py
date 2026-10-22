@@ -12,3 +12,7 @@ CHUNK_OVERLAP = 100
 # Code chunking parameters (slightly larger to preserve full functions)
 CODE_CHUNK_SIZE = 800
 CODE_CHUNK_OVERLAP = 120
+
+# Performance & Context Guardrails for Consumer Laptops
+TOP_K_RETRIEVAL = 4
+MAX_CONTEXT_CHARS = 3500

@@ -1,4 +1,8 @@
 import sys
+import warnings
+
+warnings.simplefilter("ignore")
+
 import questionary
 from rich.console import Console
 

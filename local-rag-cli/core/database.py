@@ -9,19 +9,20 @@ import hashlib
 import warnings
 from typing import List, Dict, Any, Optional
 
-# Suppress minor deprecation warning from langchain_community
-warnings.filterwarnings("ignore", category=DeprecationWarning)
+# Suppress framework deprecation warnings for a clean CLI output
+warnings.filterwarnings("ignore")
 
 import chromadb
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
 
-from core.config import DB_DIR, EMBEDDING_MODEL, OLLAMA_BASE_URL
+from core.config import DB_DIR, EMBEDDING_MODEL, OLLAMA_BASE_URL, TOP_K_RETRIEVAL
 
-# Reusable embedding instance with configurable base_url
+# Reusable embedding instance with configurable base_url and keep_alive
 embeddings = OllamaEmbeddings(
     model=EMBEDDING_MODEL,
-    base_url=OLLAMA_BASE_URL
+    base_url=OLLAMA_BASE_URL,
+    keep_alive=3600
 )
 
 
@@ -384,7 +385,7 @@ def ingest_document(file_path: str, session_name: str, splits) -> Dict[str, Any]
         raise RuntimeError(f"Ingestion failed: {e}") from e
 
 
-def get_retriever(session_name: str, k: int = 5):
+def get_retriever(session_name: str, k: int = TOP_K_RETRIEVAL):
     """Returns a LangChain retriever for the specified session collection."""
     vectorstore = Chroma(
         persist_directory=DB_DIR,

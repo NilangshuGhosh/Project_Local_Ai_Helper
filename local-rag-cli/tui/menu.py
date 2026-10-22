@@ -1,4 +1,5 @@
 import os
+import sys
 import questionary
 from rich.console import Console
 from rich.table import Table
@@ -15,7 +16,7 @@ from core.database import (
     get_session_file_summary,
 )
 from core.document_ops import load_and_split
-from core.rag_engine import build_chat_chain
+from core.rag_engine import stream_rag_response, build_chat_chain
 from core.health import display_health_banner, verify_system_readiness
 
 console = Console()
@@ -225,7 +226,6 @@ def handle_chat():
         console.print(f"[bold dim]Documents in session:[/bold dim] {file_badges}")
 
     retriever = get_retriever(session_name)
-    chain = build_chat_chain(retriever)
 
     console.print(f"[bold green]Connected to session '{session_name}'. Type 'exit' to quit.[/bold green]\n")
 
@@ -239,12 +239,53 @@ def handle_chat():
         if not query or query.strip().lower() in ["exit", "quit"]:
             break
 
-        with console.status("[dim]Searching context and generating answer...[/dim]"):
-            try:
-                response = chain.invoke({"input": query})
-                console.print(f"\n[bold magenta]AI:[/bold magenta] {response['answer']}\n")
-            except Exception as e:
-                console.print(f"\n[bold red]Error generating response:[/bold red] {e}\n")
+        # Show animated spinner during document retrieval & prompt prefill
+        stream = stream_rag_response(retriever, query)
+        first_token = None
+        context_docs = []
+        error_msg = None
+
+        try:
+            with console.status("[dim cyan]Searching documents & preparing response...[/dim cyan]", spinner="dots"):
+                for event in stream:
+                    ev_type = event.get("type")
+                    if ev_type == "context":
+                        context_docs = event.get("docs", [])
+                    elif ev_type == "token":
+                        first_token = event.get("token")
+                        break
+                    elif ev_type == "error":
+                        error_msg = event.get("error")
+                        break
+
+            if error_msg:
+                console.print(f"\n[bold red]Error:[/bold red] {error_msg}\n")
+                continue
+
+            # Spinner has cleared; stream tokens live to terminal
+            console.print("\n[bold magenta]AI:[/bold magenta] ", end="")
+            if first_token:
+                sys.stdout.write(first_token)
+                sys.stdout.flush()
+
+            for event in stream:
+                ev_type = event.get("type")
+                if ev_type == "token":
+                    sys.stdout.write(event["token"])
+                    sys.stdout.flush()
+                elif ev_type == "error":
+                    console.print(f"\n[bold red]Error:[/bold red] {event['error']}")
+                elif ev_type == "done":
+                    ttft = event.get("ttft_s", 0)
+                    total_s = event.get("elapsed_s", 0)
+                    tokens = event.get("total_tokens", 0)
+                    gen_time = max(total_s - ttft, 0.05)
+                    gen_tok_per_sec = round(tokens / gen_time, 1)
+                    console.print(f"\n[dim]({tokens} tokens • TTFT: {ttft}s • Generation: {gen_tok_per_sec} tok/s • Total: {total_s}s)[/dim]\n")
+        except KeyboardInterrupt:
+            console.print("\n[yellow][Generation stopped by user][/yellow]\n")
+        except Exception as e:
+            console.print(f"\n[bold red]Streaming error:[/bold red] {e}\n")
 
 
 def handle_delete():
