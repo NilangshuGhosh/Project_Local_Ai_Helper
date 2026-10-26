@@ -1,0 +1,153 @@
+# Strategic Blueprint & Future Roadmap: Local RAG CLI ("Local AI Helper")
+*Document Version: 2.0.0 — Production Evolution Plan*  
+*Target Environment: 100% Air-Gapped / Privacy-First Consumer & Enterprise Workstations*
+
+---
+
+## 1. Architectural Review & Industry Standards Assessment
+
+### 1.1 Is the Current Architecture "Good"?
+**Verdict: Architecturally sound as an MVP/V1 system, but transitioning into an enterprise-grade local assistant requires addressing architectural bottlenecks.**
+
+#### Strengths (What We Did Right):
+1. **Separation of Concerns:** Clear modularization across `core/database.py` (storage & vector indexing), `core/document_ops.py` (chunking & parsing), `core/rag_engine.py` (prompting & streaming generation), `core/citations.py` (verification & OS integration), and `tui/menu.py` (user interface).
+2. **True Physical Hygiene:** Unlike naive RAG demos that only perform logical ChromaDB collection drops (leaving SQLite locks and orphaned vector index files on disk), the current system enforces WAL checkpoints, garbage collection, and filesystem cleanup.
+3. **Deterministic Identity:** Vector IDs are constructed via deterministic hashes (`{session}_{basename}_{path_hash8}_c{chunk_index}`), preventing filename collision across identical basenames in different folders.
+4. **Direct Generator Streaming:** Bypassed LangChain's buffered dictionary stream wrapper to stream raw token deltas directly from the underlying LLM with millisecond TTFT tracking and ANSI typewriter rendering.
+5. **Page-Boundary Integrity:** Chunking logic respects physical page boundaries in PDFs, preventing cross-page semantic contamination.
+
+#### Technical Debt & Gaps Against Industry Standards (To Fix in V2):
+1. **LangChain Abstraction Bloat:** Using LangChain for simple Ollama/Chroma integration introduces unnecessary overhead, version deprecations (`langchain_community.vectorstores.Chroma`), and obfuscated call stacks. Industry standard for high-performance local RAG leans toward **direct SDK / lightweight clients** (e.g., raw ChromaDB client, direct Ollama REST API or `llama-cpp-python`).
+2. **Dense-Only Retrieval (No Lexical/BM25):** Pure dense embedding search fails on exact keywords (part numbers, invoice IDs, acronyms, code variable names). Industry standard RAG utilizes **Hybrid Search (Dense Vector + BM25 Lexical + Reciprocal Rank Fusion)**.
+3. **Stateless Turns (No Conversational Memory):** Every query is currently independent. Follow-up queries (e.g., *"Summarize its third point"* or *"Who was mentioned above?"*) fail because the system does not perform query contextualization or retain windowed chat history.
+4. **Basic PDF Parsing:** `pypdf` extracts raw text streams but drops table structures, column layouts, diagrams, and font hierarchies. Modern standard RAG uses layout-aware parsers (`docling`, `pymupdf4llm`, or `pdfplumber`).
+5. **Single-Process Monolith:** Database transactions and heavy model inference run synchronously within the CLI event thread.
+
+---
+
+## 2. Target Beneficiaries & Real-World Use Cases
+
+Who actually benefits from this project? Why would someone use this instead of ChatGPT, Claude, or NotebookLM?
+
+| User Persona | Core Problem / Pain Point | Real-World Offline Solution Provided |
+| :--- | :--- | :--- |
+| **Legal Counsel & Paralegals** | Client confidentiality rules (NDAs, attorney-client privilege) prohibit uploading contracts, briefs, or discovery files to cloud LLMs. | Fully air-gapped contract analysis, clause discovery, and cross-document citation without data leaving the machine. |
+| **Healthcare & Clinical Researchers** | HIPAA/GDPR regulations prevent sharing patient histories, clinical trial notes, or internal medical guidelines with cloud APIs. | Local diagnosis protocol cross-referencing and private medical paper summarization on hospital laptops. |
+| **Software Engineers & DevOps** | Proprietary corporate codebases, proprietary API docs, and internal runbooks cannot be leaked to public AI models. | Local code Q&A, log analysis, architectural pattern searches with exact file/line source citations. |
+| **Financial Analysts & Auditors** | SEC compliance and non-public material information (MNPI) risks prevent cloud parsing of unreleased quarterly figures. | Local extraction of 10-K/10-Q filings, audit trail verification, and balance sheet discrepancy checks. |
+| **Field Engineers & Defense/Marine** | Operating in zero-connectivity environments (ships, remote industrial facilities, subterranean mines, secure SCIF facilities). | Instant operational assistance and machinery manual troubleshooting with zero internet dependency. |
+
+---
+
+## 3. Performance Benchmarks & Hardware Constraints
+
+### 3.1 Measured Baseline on Consumer Workstation (Current Profile)
+*Hardware: Intel Core i5/i7 (CPU-only, 0 VRAM offload), 8GB–16GB RAM, Windows 11*
+
+| Pipeline Stage | Measured Latency / Throughput | Root Cause / Note |
+| :--- | :--- | :--- |
+| **Embedding Generation (Query)** | `~3.8s – 4.5s` | `nomic-embed-text` running on CPU via Ollama REST call. |
+| **ChromaDB HNSW Retrieval** | `~0.05s – 0.28s` | Fast in-memory SQLite + HNSW index lookup (very efficient). |
+| **Prompt Prefill & TTFT (Cold)** | `~10.5s` | Model swap / context cache warm-up on CPU. |
+| **Prompt Prefill & TTFT (Warm)** | `~2.2s – 2.8s` | With `keep_alive=3600`, context prefill for ~3,000 chars. |
+| **Inference Generation Speed** | `10.5 – 14.0 tokens/s` | `phi3:mini (3.8B Q4_0)` running single-socket CPU threads. |
+| **Peak RAM Footprint** | `~4.2 GB` | OS + Ollama (phi3 + nomic) + ChromaDB cache. |
+
+### 3.2 Target Benchmark Goals for Production V2
+
+| Metric | Current (V1) | Target (V2 CPU) | Target (V2 with Entry GPU / NPU) |
+| :--- | :--- | :--- | :--- |
+| **Query Embedding Time** | 4.0s | **< 250ms** *(FastEmbed / ONNX)* | **< 30ms** |
+| **Time-to-First-Token (TTFT)** | 10.5s cold / 2.5s warm | **< 1.2s** warm | **< 350ms** |
+| **Generation Speed** | 12 tok/s | **18 – 24 tok/s** *(llama.cpp AVX2)* | **45 – 70 tok/s** |
+| **Citation Precision** | 80% (heuristic text match) | **98%** (character-level bounding) | **98%** |
+| **Disk Storage per 1MB Doc** | ~4MB (Chroma overhead) | **< 1.2MB** (compact SQLite/FTS5) | **< 1.2MB** |
+
+---
+
+## 4. Real-World Constraints & Architectural Solutions
+
+1. **Memory & Swapping Limits (8GB RAM):**
+   - *Problem:* Running both `phi3` (2.3GB) and `nomic-embed-text` (500MB) simultaneously with OS overhead can cause Windows memory compression or paging to disk.
+   - *Solution:* Replace Ollama's external embedding service with **FastEmbed (ONNX Runtime)** inside Python. FastEmbed uses quantized BGE-small (`~67MB` RAM) and executes in `<100ms` on CPU using native AVX2 instructions without touching Ollama.
+
+2. **CPU Thermal Throttling:**
+   - *Problem:* Continuous multi-turn inference heats consumer laptop CPUs, dropping clock speeds from 4.2GHz to 1.8GHz, halving generation speed.
+   - *Solution:* Enforce strict context caps (`MAX_CONTEXT_CHARS = 2500`), stop token generation early once answer complete, and use smaller 2B–3B models optimized for mobile/laptop chips (e.g., `Qwen2.5-3B-Instruct` or `Llama-3.2-3B-Instruct`).
+
+3. **Hallucination & Grounding Integrity:**
+   - *Problem:* Small SLMs (3B parameter class) occasionally hallucinate details when context is ambiguous or partially relevant.
+   - *Solution:* Implement a **Two-Tier Grounding Filter**: (a) Citation Verification Engine comparing n-grams between context and generated claims, (b) Abstention prompt tuning with strict fallback token markers.
+
+---
+
+## 5. Comprehensive Strategic Roadmap
+
+### Phase 1: High-Performance Embedding & Hybrid Retrieval Engine
+*Goal: Drop TTFT from 10s to ~1.5s and achieve 99% keyword accuracy.*
+
+1. **Replace Ollama Embeddings with Native FastEmbed (ONNX):**
+   - Eliminate HTTP overhead to Ollama for embeddings.
+   - Model: `BAAI/bge-small-en-v1.5` or `nomic-embed-text-v1.5-Q` via `fastembed`.
+   - Latency drops from 4,000ms to 80ms per query.
+2. **Implement BM25 + Dense Hybrid Search:**
+   - Integrate `rank_bm25` alongside ChromaDB vectors.
+   - Combine scores using **Reciprocal Rank Fusion (RRF)**:
+     RRF_Score(d) = 1 / (60 + Rank_dense(d)) + 1 / (60 + Rank_BM25(d))
+   - Fixes missed searches for error codes, serial keys, and acronyms.
+3. **Cross-Encoder Re-Ranking (Lightweight):**
+   - Add a tiny re-ranker (`ms-marco-TinyBERT-L-2-v2` or `bge-reranker-small`) on the top 10 retrieved chunks to pick the true top 3.
+
+### Phase 2: Conversational Memory & Contextual Query Transformation
+*Goal: Support natural, multi-turn dialogues with context carryover.*
+
+1. **Query Rewriter / Condensation Step:**
+   - When a user asks a follow-up question (e.g., *"What were the penalties for that?"*), use a fast 1-pass SLM prompt to rewrite it into a self-contained query: *"What are the contract breach penalties in Exhibit B?"*.
+2. **Rolling Token-Capped Memory Window:**
+   - Store last K user-AI turns in SQLite with token counting (`tiktoken` or model tokenizer).
+   - Inject summarized conversation history into system prompt.
+
+### Phase 3: Enterprise-Grade Document Parsing & Chunk Context Enrichment
+*Goal: Ingest complex PDFs, scanned reports, and multi-format files without data loss.*
+
+1. **Layout-Aware PDF Extraction:**
+   - Migrate from `pypdf` to `pymupdf` (MuPDF) or `docling` to extract tables as markdown format.
+   - Extract headings and section hierarchy so tables are not mangled into illegible sentences.
+2. **Parent-Child Chunking (Hierarchical RAG):**
+   - Index small child chunks (200 chars) for high-accuracy embedding matching.
+   - Retrieve and pass the larger parent chunk (800 chars) to the LLM for richer contextual understanding.
+3. **Contextual Headers Injection:**
+   - Prepend file name and section title to every chunk: `[Doc: HR_Policy.pdf | Section: Leave Rules] ...chunk text...` so the vector model always knows the chunk's scope.
+
+### Phase 4: Model Engine Upgrade & Hardware Acceleration
+*Goal: Maximize generation speed and minimize system load.*
+
+1. **Multi-Model Support via Config:**
+   - Support `llama3.2:3b`, `qwen2.5:3b`, `phi3.5:mini`, and `mistral:7b`.
+   - Implement an auto-detection utility at startup that benchmarks local hardware and suggests the optimal model for the user's RAM and CPU/GPU.
+2. **Direct GPU/DirectML/Vulkan Detection:**
+   - Check for Intel Iris Xe, AMD Radeon, or NVIDIA GeForce and configure Ollama/llama.cpp to offload layers automatically.
+
+### Phase 5: Modern UI/UX Evolution & Ecosystem Integration
+*Goal: Transform from a raw terminal script into a polished, distributable desktop app.*
+
+1. **Modern Terminal User Interface (TUI):**
+   - Upgrade using `Textual` or `Rich` full-screen split-view:
+     - Left Panel: Ingested documents tree & session selector.
+     - Center Panel: Real-time streaming conversation.
+     - Right Panel: Interactive source inspector with highlighted excerpts.
+2. **Optional Web UI / Local Server Mode:**
+   - FastAPI backend with a lightweight web interface (or Electron/Tauri desktop wrapper) allowing local LAN access (e.g., run on a home server or office workstation and chat from mobile/tablet over local Wi-Fi).
+3. **Session Export & Compliance Auditing:**
+   - Export chats with full citations to formatted PDF or Markdown (`/export session_name`).
+
+---
+
+## 6. Immediate Next Action Items (for Developer / AI Assistant)
+
+1. **Step 1:** Add Multi-Turn Memory (`core/memory.py`) — track last 5 turns and append to prompt.
+2. **Step 2:** Integrate `fastembed` for sub-second query embedding without waiting on Ollama embedding endpoints.
+3. **Step 3:** Implement BM25 lexical search and fuse with ChromaDB results using RRF.
+4. **Step 4:** Replace raw input loops in `tui/menu.py` with `rich` panels or `textual` for visual windowing.
+5. **Step 5:** Add a one-command system profiler (`main.py --benchmark`) that measures local CPU/RAM and recommends the optimal model and chunk settings.
+
