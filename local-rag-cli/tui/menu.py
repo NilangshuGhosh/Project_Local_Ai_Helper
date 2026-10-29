@@ -23,6 +23,7 @@ from core.citations import (
     open_source_file_in_windows,
     display_full_source_detail,
 )
+from core.memory import memory_manager
 
 console = Console()
 
@@ -255,8 +256,31 @@ def handle_chat():
                 "  • [bold]/sources[/bold]     : Re-display the verified sources table for the last answer\n"
                 "  • [bold]/source <N>[/bold]  : View the complete uncropped text and metadata of Source N\n"
                 "  • [bold]/open <N>[/bold]    : Open Source N's file in your default Windows viewer\n"
+                "  • [bold]/history[/bold]     : View previous conversation turns in this session\n"
+                "  • [bold]/clear[/bold]       : Reset conversation memory for this session (start fresh topic)\n"
                 "  • [bold]exit[/bold] or [bold]quit[/bold]: Return to the main menu\n"
             )
+            continue
+
+        if cleaned_query.lower() == "/clear":
+            cleared = memory_manager.clear(session_name)
+            if cleared:
+                console.print("[bold green]✔ Conversation memory cleared for this session.[/bold green]\n")
+            else:
+                console.print("[dim]Conversation memory is already empty.[/dim]\n")
+            continue
+
+        if cleaned_query.lower() == "/history":
+            turns = memory_manager.get_turns(session_name)
+            if not turns:
+                console.print("[yellow]No conversation history in memory yet.[/yellow]\n")
+            else:
+                console.print(f"\n[bold cyan]Conversation History for '{session_name}' ({len(turns)} turns):[/bold cyan]")
+                for i, t in enumerate(turns, 1):
+                    console.print(f"[bold dim]Turn {i}:[/bold dim]")
+                    console.print(f"  [bold]User:[/bold] {t.user_query}")
+                    console.print(f"  [bold magenta]AI:[/bold magenta] {t.assistant_response}")
+                console.print()
             continue
 
         if cleaned_query.lower() == "/sources":
@@ -296,10 +320,11 @@ def handle_chat():
             continue
 
         # Show animated spinner during document retrieval & prompt prefill
-        stream = stream_rag_response(retriever, query)
+        stream = stream_rag_response(retriever, query, session_name=session_name)
         first_token = None
         context_docs = []
         error_msg = None
+        full_answer = ""
 
         try:
             with console.status("[dim cyan]Searching documents & preparing response...[/dim cyan]", spinner="dots"):
@@ -321,12 +346,14 @@ def handle_chat():
             # Spinner has cleared; stream tokens live to terminal
             console.print("\n[bold magenta]AI:[/bold magenta] ", end="")
             if first_token:
+                full_answer += first_token
                 sys.stdout.write(first_token)
                 sys.stdout.flush()
 
             for event in stream:
                 ev_type = event.get("type")
                 if ev_type == "token":
+                    full_answer += event["token"]
                     sys.stdout.write(event["token"])
                     sys.stdout.flush()
                 elif ev_type == "error":
@@ -338,6 +365,10 @@ def handle_chat():
                     gen_time = max(total_s - ttft, 0.05)
                     gen_tok_per_sec = round(tokens / gen_time, 1)
                     console.print(f"\n[dim]({tokens} tokens • TTFT: {ttft}s • Generation: {gen_tok_per_sec} tok/s • Total: {total_s}s)[/dim]\n")
+
+            # Record turn in conversation memory if answer was generated
+            if full_answer.strip():
+                memory_manager.add_turn(session_name, query, full_answer)
 
             # Render verified sources panel below response
             if context_docs:

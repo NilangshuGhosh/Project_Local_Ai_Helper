@@ -15,4 +15,9 @@ CODE_CHUNK_OVERLAP = 120
 
 # Performance & Context Guardrails for Consumer Laptops
 TOP_K_RETRIEVAL = 4
-MAX_CONTEXT_CHARS = 3500
+MAX_CONTEXT_CHARS = 3000
+
+# Conversational Memory Guardrails (Protects CPU from thermal throttling & prefill latency)
+MAX_HISTORY_TURNS = 3             # Keep at most last 3 interaction turns (user-assistant pairs)
+MAX_HISTORY_CHARS = 750           # Hard ceiling for formatted dialogue history in prompt
+MAX_ASSISTANT_SUMMARY_CHARS = 200 # Compact representation for previous AI replies in memory
