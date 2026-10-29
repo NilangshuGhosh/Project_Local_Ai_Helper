@@ -1,6 +1,7 @@
+import os
 import time
 import warnings
-from typing import List, Generator, Dict, Any
+from typing import List, Generator, Dict, Any, Optional
 
 warnings.filterwarnings("ignore")
 from langchain_core.documents import Document
@@ -11,8 +12,9 @@ from langchain_classic.chains import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 
 from core.config import LLM_MODEL, OLLAMA_BASE_URL, MAX_CONTEXT_CHARS
+from core.memory import memory_manager
 
-# Strict factual system prompt with balanced context handling and inline citation requirements
+# Strict factual system prompt with balanced context handling, dialogue memory, and citations
 SYSTEM_PROMPT_TEMPLATE = (
     "You are a strict, factual local AI assistant. Answer the user's question BASED on the provided Context below.\n\n"
     "CRITICAL OPERATIONAL RULES:\n"
@@ -22,6 +24,7 @@ SYSTEM_PROMPT_TEMPLATE = (
     "4. Do NOT invent data, formulas, or outside details that are not in the context.\n"
     "5. CITATION REQUIREMENT: After every factual statement or answer, append its source citation tag in brackets, for example: [Source 1] or [Source 2]. Use ONLY the [Source N] tags provided in the context below.\n"
     "6. Keep the answer direct, factually grounded, and concise.\n\n"
+    "{history_section}"
     "Context:\n{context}"
 )
 
@@ -77,28 +80,35 @@ def format_context_with_budget(docs: List[Document], max_chars: int = MAX_CONTEX
 
 def stream_rag_response(
     retriever,
-    query: str
+    query: str,
+    session_name: Optional[str] = None
 ) -> Generator[Dict[str, Any], None, None]:
     """
-    Real-time streaming generator for RAG responses.
+    Real-time streaming generator for RAG responses with conversational memory support.
     
     Yields:
-        - {"type": "context", "docs": docs, "retrieval_ms": int}
+        - {"type": "context", "docs": docs, "retrieval_ms": int, "retrieval_query": str}
         - {"type": "token", "token": str}
         - {"type": "done", "total_tokens": int, "elapsed_s": float, "ttft_s": float}
     """
     t_start = time.perf_counter()
 
-    # 1. Retrieve matching chunks from vector database
+    # 1. Formulate retrieval query (lightweight heuristic anaphora resolution if follow-up)
+    retrieval_query = query
+    if session_name:
+        retrieval_query = memory_manager.get_contextual_retrieval_query(session_name, query)
+
+    # 2. Retrieve matching chunks from vector database
     t_ret_start = time.perf_counter()
-    docs = retriever.invoke(query)
+    docs = retriever.invoke(retrieval_query)
     retrieval_ms = round((time.perf_counter() - t_ret_start) * 1000, 1)
 
     # Yield retrieved context immediately so the caller has document metadata
     yield {
         "type": "context",
         "docs": docs,
-        "retrieval_ms": retrieval_ms
+        "retrieval_ms": retrieval_ms,
+        "retrieval_query": retrieval_query if retrieval_query != query else None
     }
 
     if not docs:
@@ -112,16 +122,29 @@ def stream_rag_response(
         }
         return
 
-    # 2. Build lean, budgeted prompt
+    # 3. Build lean, budgeted prompt with optional conversation memory
     formatted_context = format_context_with_budget(docs)
-    system_text = SYSTEM_PROMPT_TEMPLATE.format(context=formatted_context)
+    
+    formatted_history = ""
+    if session_name:
+        formatted_history = memory_manager.get_formatted_history(session_name)
+
+    if formatted_history:
+        history_block = f"Recent Conversation (for reference/pronouns):\n{formatted_history}\n\n"
+    else:
+        history_block = ""
+
+    system_text = SYSTEM_PROMPT_TEMPLATE.format(
+        history_section=history_block,
+        context=formatted_context
+    )
 
     messages = [
         SystemMessage(content=system_text),
         HumanMessage(content=query)
     ]
 
-    # 3. Stream tokens from Ollama
+    # 4. Stream tokens from Ollama
     llm = get_chat_llm()
     token_count = 0
     t_first_token = None
@@ -157,7 +180,7 @@ def build_chat_chain(retriever):
     """
     llm = get_chat_llm()
     prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT_TEMPLATE.replace("{context}", "{context}")),
+        ("system", SYSTEM_PROMPT_TEMPLATE.replace("{history_section}", "").replace("{context}", "{context}")),
         ("human", "{input}"),
     ])
     doc_chain = create_stuff_documents_chain(llm, prompt)
