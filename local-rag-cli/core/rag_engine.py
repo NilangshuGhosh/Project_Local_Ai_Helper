@@ -11,8 +11,10 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 from langchain_classic.chains import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 
-from core.config import LLM_MODEL, OLLAMA_BASE_URL, MAX_CONTEXT_CHARS
+from core.config import LLM_MODEL, OLLAMA_BASE_URL, MAX_CONTEXT_CHARS, TOP_K_RETRIEVAL
 from core.memory import memory_manager
+from core.hybrid_search import hybrid_engine
+from core.database import get_session_documents
 
 # Strict factual system prompt with balanced context handling, dialogue memory, and citations
 SYSTEM_PROMPT_TEMPLATE = (
@@ -98,10 +100,20 @@ def stream_rag_response(
     if session_name:
         retrieval_query = memory_manager.get_contextual_retrieval_query(session_name, query)
 
-    # 2. Retrieve matching chunks from vector database
-    t_ret_start = time.perf_counter()
-    docs = retriever.invoke(retrieval_query)
-    retrieval_ms = round((time.perf_counter() - t_ret_start) * 1000, 1)
+    # 2. Retrieve matching chunks via Hybrid Search (Dense Vector + Lexical BM25 + RRF)
+    if session_name:
+        docs, ret_metrics = hybrid_engine.search(
+            session_name=session_name,
+            retriever=retriever,
+            query=retrieval_query,
+            get_docs_fn=get_session_documents,
+            top_k=TOP_K_RETRIEVAL
+        )
+        retrieval_ms = ret_metrics["total_ms"]
+    else:
+        t_ret_start = time.perf_counter()
+        docs = retriever.invoke(retrieval_query)
+        retrieval_ms = round((time.perf_counter() - t_ret_start) * 1000, 1)
 
     # Yield retrieved context immediately so the caller has document metadata
     yield {

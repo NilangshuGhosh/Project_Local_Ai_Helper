@@ -13,10 +13,12 @@ from typing import List, Dict, Any, Optional
 warnings.filterwarnings("ignore")
 
 import chromadb
+from langchain_core.documents import Document
 from langchain_ollama import OllamaEmbeddings
 from langchain_community.vectorstores import Chroma
 
 from core.config import DB_DIR, EMBEDDING_MODEL, OLLAMA_BASE_URL, TOP_K_RETRIEVAL
+from core.hybrid_search import hybrid_engine
 
 # Reusable embedding instance with configurable base_url and keep_alive
 embeddings = OllamaEmbeddings(
@@ -222,6 +224,7 @@ def delete_session(session_name: str) -> bool:
             return False
 
         client.delete_collection(session_name)
+        hybrid_engine.invalidate(session_name)
         
         try:
             client.clear_system_cache()
@@ -298,6 +301,8 @@ def delete_file_from_session(session_name: str, file_identifier: str, by_path: b
         else:
             _vacuum_and_checkpoint()
 
+        hybrid_engine.invalidate(session_name)
+
         return {
             "success": True,
             "deleted_chunks": len(matching_ids),
@@ -366,6 +371,7 @@ def ingest_document(file_path: str, session_name: str, splits) -> Dict[str, Any]
         )
 
         _vacuum_and_checkpoint()
+        hybrid_engine.invalidate(session_name)
 
         return {
             "status": status,
@@ -393,6 +399,31 @@ def get_retriever(session_name: str, k: int = TOP_K_RETRIEVAL):
         collection_name=session_name,
     )
     return vectorstore.as_retriever(search_kwargs={"k": k})
+
+
+def get_session_documents(session_name: str) -> List[Document]:
+    """
+    Retrieves all document chunks with metadata from ChromaDB for a given session.
+    Used by BM25 to build an in-memory lexical index.
+    """
+    client = get_chroma_client()
+    try:
+        col = client.get_collection(session_name)
+        res = col.get(include=["documents", "metadatas"])
+        docs = []
+        documents_list = res.get("documents") or []
+        metadatas_list = res.get("metadatas") or []
+        for content, meta in zip(documents_list, metadatas_list):
+            if content:
+                docs.append(Document(page_content=content, metadata=meta or {}))
+        return docs
+    except Exception:
+        return []
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def get_database_stats() -> Dict[str, Any]:
