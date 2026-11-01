@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from core.config import OLLAMA_BASE_URL, EMBEDDING_MODEL, LLM_MODEL
+from core.config import OLLAMA_BASE_URL, EMBEDDING_MODEL, LLM_MODEL, get_active_model
 
 
 def check_ollama_service(base_url: str = OLLAMA_BASE_URL) -> Dict[str, Any]:
@@ -79,14 +79,15 @@ def verify_system_readiness(base_url: str = OLLAMA_BASE_URL) -> Dict[str, Any]:
         }
 
     installed = ollama_status["models"]
+    active_llm = get_active_model()
     has_embed = is_model_installed(EMBEDDING_MODEL, installed)
-    has_llm = is_model_installed(LLM_MODEL, installed)
+    has_llm = is_model_installed(active_llm, installed)
 
     issues = []
     if not has_embed:
         issues.append(f"Missing embedding model '{EMBEDDING_MODEL}'. Fix: run 'ollama pull {EMBEDDING_MODEL}'")
     if not has_llm:
-        issues.append(f"Missing LLM model '{LLM_MODEL}'. Fix: run 'ollama pull {LLM_MODEL}'")
+        issues.append(f"Missing active LLM model '{active_llm}'. Fix: run 'ollama pull {active_llm}'")
 
     ready = has_embed and has_llm
     return {
@@ -94,6 +95,7 @@ def verify_system_readiness(base_url: str = OLLAMA_BASE_URL) -> Dict[str, Any]:
         "ollama_online": True,
         "embedding_ready": has_embed,
         "llm_ready": has_llm,
+        "active_model": active_llm,
         "available_models": installed,
         "issues": issues
     }
@@ -105,6 +107,7 @@ def display_health_banner(console: Console) -> bool:
     Returns True if system is completely ready, False otherwise.
     """
     status = verify_system_readiness()
+    active_llm = get_active_model()
 
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column("Component", style="bold")
@@ -124,9 +127,9 @@ def display_health_banner(console: Console) -> bool:
 
     # LLM Model row
     if status["llm_ready"]:
-        table.add_row(f"LLM ({LLM_MODEL})", "[bold green]READY[/bold green]")
+        table.add_row(f"Active LLM ({active_llm})", "[bold green]READY[/bold green]")
     else:
-        table.add_row(f"LLM ({LLM_MODEL})", "[bold red]NOT FOUND[/bold red]")
+        table.add_row(f"Active LLM ({active_llm})", "[bold red]NOT FOUND[/bold red]")
 
     border_style = "green" if status["ready"] else "yellow"
     title = "[bold green]System Health Check[/bold green]" if status["ready"] else "[bold yellow]System Health Alert[/bold yellow]"

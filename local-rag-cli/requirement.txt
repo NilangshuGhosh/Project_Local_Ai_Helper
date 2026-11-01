@@ -191,3 +191,30 @@ Critical Real-World Hardware & Latency Protections:
      is prioritized at Rank 1 in RRF fusion.
    - Prompt rules explicitly forbid the LLM from re-answering, summarizing, or reconciling
      prior dialogue topics, restricting conversation history strictly to background pronoun reference.
+
+================================================================================
+PHASE 8: DYNAMIC MULTI-MODEL REGISTRY & RUNTIME SWAPPING (QWEN 2.5 & PHI-3)
+================================================================================
+Motivation & Problem Solved:
+---------------------------
+Fixed LLM definitions force users to choose between high latency on modest CPUs
+or lower reasoning capabilities. To optimize for 8GB RAM laptop hardware while
+retaining flexibility, the application now supports runtime switching between
+modern small language models (SLMs).
+
+Supported Models:
+- Qwen 2.5 (1.5B): Ultra-fast prompt prefill (~3.2s) and low RAM footprint (~1.1GB).
+  Default model optimized for responsive TTFT on consumer laptop CPUs.
+- Phi-3 (3.8B): Standard RAG model for deeper reasoning contexts (~2.4GB RAM).
+
+Architecture & Implementation:
+1. Dynamic Model Registry (core/config.py):
+   - `get_active_model()` and `set_active_model(tag)` manage the global active model.
+   - `SUPPORTED_MODELS` registry maps models to user-friendly descriptions.
+2. Runtime Swapping:
+   - Main Menu: Direct option to switch models anytime:
+     "Switch Active AI Model (Current: qwen2.5:1.5b)"
+   - Interactive Chat Command: `/model` allows switching models in the middle of a
+     chat session without dropping vector session context or conversation memory.
+3. Dynamic Health Verification (core/health.py):
+   - Startup health checks adaptively verify that the active model is installed in Ollama.

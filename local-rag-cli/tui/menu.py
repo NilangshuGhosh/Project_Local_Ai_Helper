@@ -24,6 +24,7 @@ from core.citations import (
     display_full_source_detail,
 )
 from core.memory import memory_manager
+from core.config import SUPPORTED_MODELS, get_active_model, set_active_model
 
 console = Console()
 
@@ -253,6 +254,7 @@ def handle_chat():
         if cleaned_query.lower() == "/help":
             console.print(
                 "\n[bold cyan]Interactive Chat Commands:[/bold cyan]\n"
+                "  • [bold]/model[/bold]       : View or switch active LLM (e.g. Qwen 2.5 vs Phi-3)\n"
                 "  • [bold]/sources[/bold]     : Re-display the verified sources table for the last answer\n"
                 "  • [bold]/source <N>[/bold]  : View the complete uncropped text and metadata of Source N\n"
                 "  • [bold]/open <N>[/bold]    : Open Source N's file in your default Windows viewer\n"
@@ -260,6 +262,10 @@ def handle_chat():
                 "  • [bold]/clear[/bold]       : Reset conversation memory for this session (start fresh topic)\n"
                 "  • [bold]exit[/bold] or [bold]quit[/bold]: Return to the main menu\n"
             )
+            continue
+
+        if cleaned_query.lower() == "/model":
+            handle_switch_model()
             continue
 
         if cleaned_query.lower() == "/clear":
@@ -453,3 +459,28 @@ def handle_storage_health():
             console.print(f"[bold green]✔ Cleaned up {deleted} orphaned segment directory(ies) and vacuumed database.[/bold green]\n")
         else:
             console.print("[green]✔ Storage is clean! No orphaned directories found. SQLite vacuumed.[/green]\n")
+
+
+def handle_switch_model():
+    """Interactive selector to switch the active LLM between installed models at runtime."""
+    active = get_active_model()
+    
+    choices = []
+    for tag, info in SUPPORTED_MODELS.items():
+        is_active = (tag == active)
+        prefix = "★ [ACTIVE] " if is_active else "  "
+        title = f"{prefix}{info['name']} — {info['description']}"
+        choices.append(questionary.Choice(title=title, value=tag))
+
+    choices.append(questionary.Choice(title="< Cancel (Keep current)", value=None))
+
+    selected = questionary.select(
+        f"Select Active LLM Model (Currently: {active}):",
+        choices=choices
+    ).ask()
+
+    if selected and selected != active:
+        set_active_model(selected)
+        console.print(f"[bold green]✔ Active AI Model switched to:[/bold green] [bold cyan]{selected}[/bold cyan]\n")
+    elif selected == active:
+        console.print(f"[dim]Model '{active}' is already active.[/dim]\n")

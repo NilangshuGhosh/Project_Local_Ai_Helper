@@ -7,6 +7,7 @@ import questionary
 from rich.console import Console
 
 from core.health import display_health_banner
+from core.config import get_active_model
 from tui.menu import (
     handle_list_sessions,
     handle_ingest,
@@ -14,6 +15,7 @@ from tui.menu import (
     handle_manage_session_docs,
     handle_delete,
     handle_storage_health,
+    handle_switch_model,
 )
 
 console = Console()
@@ -28,6 +30,7 @@ def main():
     display_health_banner(console)
 
     while True:
+        active_model = get_active_model()
         try:
             action = questionary.select(
                 "What would you like to do?",
@@ -36,6 +39,7 @@ def main():
                     "Ingest Document (New or Existing Session)",
                     "Manage Documents in a Session (Inspect / Remove / Add)",
                     "List Active Sessions",
+                    f"Switch Active AI Model (Current: {active_model})",
                     "Delete (Session or Document)",
                     "Storage & System Health",
                     "Exit"
@@ -53,6 +57,8 @@ def main():
             handle_manage_session_docs()
         elif action == "List Active Sessions":
             handle_list_sessions()
+        elif action and action.startswith("Switch Active AI Model"):
+            handle_switch_model()
         elif action == "Delete (Session or Document)":
             handle_delete()
         elif action == "Storage & System Health":

@@ -11,7 +11,13 @@ from langchain_classic.chains.combine_documents import create_stuff_documents_ch
 from langchain_classic.chains import create_retrieval_chain
 from langchain_core.prompts import ChatPromptTemplate
 
-from core.config import LLM_MODEL, OLLAMA_BASE_URL, MAX_CONTEXT_CHARS, TOP_K_RETRIEVAL
+from core.config import (
+    LLM_MODEL,
+    OLLAMA_BASE_URL,
+    MAX_CONTEXT_CHARS,
+    TOP_K_RETRIEVAL,
+    get_active_model
+)
 from core.memory import memory_manager
 from core.hybrid_search import hybrid_engine
 from core.database import get_session_documents
@@ -34,8 +40,9 @@ SYSTEM_PROMPT_TEMPLATE = (
 
 def get_chat_llm() -> ChatOllama:
     """Returns a ChatOllama instance configured for low-temperature factual generation."""
+    active_model = get_active_model()
     return ChatOllama(
-        model=LLM_MODEL,
+        model=active_model,
         temperature=0.0,
         base_url=OLLAMA_BASE_URL,
         keep_alive=3600
