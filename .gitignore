@@ -1,17 +1,21 @@
-@"
 # Python virtual environments
 venv/
 .venv/
 env/
 
-# Python-generated files
+# Python cache & compiled files
 __pycache__/
 *.py[cod]
-# Local vector DB data
-chroma_db/
-# Local secrets and settings
-.env
-"@ | Set-Content .gitignore
+*$py.class
 
-git init
-git status --short
+# Local vector database storage (keeps repo small and private)
+chroma_db/
+**/chroma_db/
+
+# Local secrets & environment files
+.env
+*.env
+
+# Operating system artifacts
+.DS_Store
+Thumbs.db
