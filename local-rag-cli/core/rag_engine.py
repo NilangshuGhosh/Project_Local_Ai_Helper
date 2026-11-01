@@ -20,12 +20,13 @@ from core.database import get_session_documents
 SYSTEM_PROMPT_TEMPLATE = (
     "You are a strict, factual local AI assistant. Answer the user's question BASED on the provided Context below.\n\n"
     "CRITICAL OPERATIONAL RULES:\n"
-    "1. Answer BASED on the provided context. Ground every factual claim directly in the context.\n"
-    "2. If the context is partially relevant, use it and be explicit about what the context does and does not say.\n"
-    "3. Only if there is absolutely nothing related to the question in the context, say so clearly: 'I cannot find that information in the document.'\n"
-    "4. Do NOT invent data, formulas, or outside details that are not in the context.\n"
-    "5. CITATION REQUIREMENT: After every factual statement or answer, append its source citation tag in brackets, for example: [Source 1] or [Source 2]. Use ONLY the [Source N] tags provided in the context below.\n"
-    "6. Keep the answer direct, factually grounded, and concise.\n\n"
+    "1. Answer ONLY the Current User Question below. Ground every factual claim directly in the Context.\n"
+    "2. CONVERSATION HISTORY RULE: Previous dialogue (if provided) is strictly background reference to resolve pronouns ('she', 'it', 'they') in the Current Question. Never re-answer, summarize, or reconcile prior conversation topics.\n"
+    "3. If the context is partially relevant to the Current Question, use it and be explicit about what the context does and does not say.\n"
+    "4. Only if there is absolutely nothing related to the Current Question in the context, say so clearly: 'I cannot find that information in the document.'\n"
+    "5. Do NOT invent data, formulas, or outside details that are not in the context.\n"
+    "6. CITATION REQUIREMENT: After every factual statement or answer, append its source citation tag in brackets, for example: [Source 1] or [Source 2]. Use ONLY the [Source N] tags provided in the context below.\n"
+    "7. Keep the answer direct, factually grounded, and concise.\n\n"
     "{history_section}"
     "Context:\n{context}"
 )
@@ -142,7 +143,7 @@ def stream_rag_response(
         formatted_history = memory_manager.get_formatted_history(session_name)
 
     if formatted_history:
-        history_block = f"Recent Conversation (for reference/pronouns):\n{formatted_history}\n\n"
+        history_block = f"Previous Dialogue Context (Reference ONLY - do not re-answer):\n{formatted_history}\n\n"
     else:
         history_block = ""
 

@@ -82,38 +82,52 @@ class ConversationMemoryManager:
 
     def get_contextual_retrieval_query(self, session_name: str, current_query: str) -> str:
         """
-        Lightweight zero-cost query enricher for ChromaDB retrieval.
+        Lightweight zero-cost query enricher for ChromaDB/BM25 retrieval.
         
-        If the user asks an elliptical or pronoun-dependent question (e.g., 'What is her email?',
-        'Tell me more about it', 'Why?'), it prepends key context from the immediate prior turn.
-        Takes <0.01ms of CPU time (pure string heuristics, 0 model inference).
+        Enriches ONLY true anaphora/elliptical follow-ups without contaminating self-contained queries.
+        Takes <0.01ms of CPU compute (pure string heuristics, 0 model inference).
         """
         turns = self._sessions.get(session_name, [])
         if not turns:
             return current_query
 
-        query_lower = current_query.strip().lower()
+        clean_query = current_query.strip()
+        query_lower = clean_query.lower()
         words = query_lower.split()
 
-        # Pronouns and anaphoric markers indicating dependency on previous context
-        anaphora_markers = {
+        # 1. Self-Contained Guard:
+        # If query contains an explicit document ID / code (e.g. SPA-2026-C, ERR_403)
+        # or explicit document references, it is 100% self-contained and must never be contaminated.
+        has_explicit_id = bool(re.search(r"\b[A-Za-z0-9]+[-_][A-Za-z0-9-_]+\b", clean_query))
+        has_doc_indicator = any(m in query_lower for m in [
+            "doc:", "document:", "file:", "section:", "this doc", "this document",
+            "this file", "this pdf", "the doc", "the document", "the file", "the pdf"
+        ])
+        if has_explicit_id or has_doc_indicator:
+            return clean_query
+
+        # 2. Check for true personal pronouns that depend on previous antecedents
+        true_personal_pronouns = {
             "he", "him", "his", "she", "her", "hers", "it", "its",
-            "they", "them", "their", "theirs", "this", "that", "these",
-            "those", "same", "former", "latter", "above", "such",
-            "who", "what", "which", "why", "how"
+            "they", "them", "their", "theirs"
         }
+        has_true_pronoun = any(w in true_personal_pronouns for w in words)
 
-        has_pronoun = any(w in anaphora_markers for w in words)
-        is_very_short = len(words) <= 4
+        # 3. Check for conversational continuation phrases
+        is_continuation = query_lower.startswith((
+            "what about ", "how about ", "and what ", "and how ",
+            "and the ", "and why ", "why ", "why?", "where is it", "how so"
+        ))
 
-        if has_pronoun or is_very_short:
+        # 4. Elliptical queries: very short phrases (<= 3 words) without full standalone question structure
+        is_elliptical = len(words) <= 3 and not re.search(r"\b(who|what|where|how|why)\s+is\s+\w+\b", query_lower)
+
+        if has_true_pronoun or is_continuation or is_elliptical:
             last_turn = turns[-1]
-            # Strip question marks and clean prior user query
             prior_subject = re.sub(r"[?!.,]", "", last_turn.user_query).strip()
-            # Combine to formulate an enriched retrieval query for ChromaDB
-            return f"{prior_subject} {current_query.strip()}"
+            return f"{prior_subject} {clean_query}"
 
-        return current_query
+        return clean_query
 
     def clear(self, session_name: str) -> bool:
         """Clears conversational memory for a given session."""

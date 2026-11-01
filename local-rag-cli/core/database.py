@@ -391,7 +391,7 @@ def ingest_document(file_path: str, session_name: str, splits) -> Dict[str, Any]
         raise RuntimeError(f"Ingestion failed: {e}") from e
 
 
-def get_retriever(session_name: str, k: int = TOP_K_RETRIEVAL):
+def get_retriever(session_name: str, k: int = 8):
     """Returns a LangChain retriever for the specified session collection."""
     vectorstore = Chroma(
         persist_directory=DB_DIR,

@@ -177,3 +177,17 @@ Critical Real-World Hardware & Latency Protections:
    RRF_Score(d) = sum( 1.0 / (60 + Rank_i + 1) )
    Documents appearing in both Dense and BM25 lists are boosted to the top rank, ensuring
    the LLM context receives the most factually and lexically precise chunks.
+
+4. Self-Contained Query Guard & Anaphora Isolation (core/memory.py):
+   - Eliminated false-positive query contamination where interrogatives ('what', 'how')
+     or determiners ('this doc') combined previous topics into independent questions.
+   - Preserved true personal pronouns ('he', 'she', 'it', 'they') and elliptical follow-ups
+     ('why?', 'what about salary?', 'and the timeline?').
+   - Self-Contained Guard: Queries with explicit alphanumeric codes (e.g., SPA-2026-C)
+     or explicit doc indicators are protected from topic contamination.
+
+5. Identifier Priority & Prompt Scope Hardening (core/rag_engine.py, core/hybrid_search.py):
+   - When a query contains an explicit ID or document indicator, BM25's #1 exact match
+     is prioritized at Rank 1 in RRF fusion.
+   - Prompt rules explicitly forbid the LLM from re-answering, summarizing, or reconciling
+     prior dialogue topics, restricting conversation history strictly to background pronoun reference.

@@ -7,11 +7,22 @@ from rank_bm25 import BM25Okapi
 from langchain_core.documents import Document
 
 
+STOPWORDS = {
+    "a", "an", "the", "in", "on", "at", "of", "for", "to", "is", "are",
+    "was", "were", "this", "that", "these", "those", "me", "you", "give",
+    "very", "brief", "doc", "document", "tell", "show", "what", "how",
+    "who", "which", "where", "why", "can", "could", "would", "should"
+}
+
+
 def _tokenize(text: str) -> List[str]:
-    """Fast, lightweight regex tokenizer for lexical matching (<0.05ms)."""
+    """Fast, lightweight regex tokenizer with stopword filtering for lexical matching (<0.05ms)."""
     if not text:
         return []
-    return re.findall(r"\w+", text.lower())
+    tokens = re.findall(r"\w+", text.lower())
+    # Keep meaningful words (filter common stopwords unless the query is very short)
+    filtered = [t for t in tokens if t not in STOPWORDS and len(t) > 1]
+    return filtered if filtered else tokens
 
 
 def _doc_unique_key(doc: Document) -> str:
@@ -125,11 +136,13 @@ class HybridSearchEngine:
         dense_docs: List[Document],
         bm25_docs: List[Document],
         k: int = 60,
-        top_k: int = 4
+        top_k: int = 4,
+        query: Optional[str] = None
     ) -> List[Document]:
         """
         Standard Reciprocal Rank Fusion (RRF) algorithm:
         RRF_Score(d) = sum( 1.0 / (k + rank_i + 1) )
+        Prioritizes top BM25 lexical hit when query contains an explicit ID or document code.
         """
         doc_scores: Dict[str, float] = {}
         doc_store: Dict[str, Document] = {}
@@ -140,17 +153,35 @@ class HybridSearchEngine:
             doc_store[key] = doc
             doc_scores[key] = doc_scores.get(key, 0.0) + (1.0 / (k + rank + 1))
 
-        # 2. Score BM25 lexical documents
+        # 2. Score BM25 lexical documents (weighted 1.25 so exact keyword hits are not washed out)
         for rank, doc in enumerate(bm25_docs):
             key = _doc_unique_key(doc)
             if key not in doc_store:
                 doc_store[key] = doc
-            doc_scores[key] = doc_scores.get(key, 0.0) + (1.0 / (k + rank + 1))
+            doc_scores[key] = doc_scores.get(key, 0.0) + (1.25 / (k + rank + 1))
 
         # 3. Sort by combined RRF score descending
         sorted_keys = sorted(doc_scores.keys(), key=lambda k_: doc_scores[k_], reverse=True)
+        fused = [doc_store[key] for key in sorted_keys[:top_k]]
 
-        return [doc_store[key] for key in sorted_keys[:top_k]]
+        # 4. Explicit Identifier Priority Guard:
+        # If the user queried an explicit alphanumeric code (e.g. SPA-2026-C, ERR_403) or doc indicator,
+        # ensure BM25's #1 exact match is placed at Rank 1.
+        if query and bm25_docs:
+            has_explicit_id = bool(
+                re.search(r"\b[A-Za-z0-9]+[-_][A-Za-z0-9-_]+\b", query) or
+                any(m in query.lower() for m in ["doc:", "id:", "code:", "this doc", "this document"])
+            )
+            top_bm25 = bm25_docs[0]
+            if has_explicit_id:
+                if top_bm25 in fused:
+                    fused.remove(top_bm25)
+                    fused.insert(0, top_bm25)
+                elif fused:
+                    fused.pop()
+                    fused.insert(0, top_bm25)
+
+        return fused
 
     def search(
         self,
@@ -168,22 +199,29 @@ class HybridSearchEngine:
         """
         t_start = time.perf_counter()
 
-        # 1. Dense vector search
+        # 1. Dense vector search with expanded candidate pool for high-recall fusion
         t_dense_start = time.perf_counter()
         try:
-            dense_docs = retriever.invoke(query)
+            candidate_k = max(top_k * 2, 8)
+            if hasattr(retriever, "search_kwargs") and isinstance(retriever.search_kwargs, dict):
+                original_k = retriever.search_kwargs.get("k", top_k)
+                retriever.search_kwargs["k"] = candidate_k
+                dense_docs = retriever.invoke(query)
+                retriever.search_kwargs["k"] = original_k
+            else:
+                dense_docs = retriever.invoke(query)
         except Exception:
             dense_docs = []
         dense_ms = round((time.perf_counter() - t_dense_start) * 1000, 1)
 
-        # 2. Lexical BM25 search
+        # 2. Lexical BM25 search with matching candidate pool
         t_bm25_start = time.perf_counter()
         try:
             bm25_docs = self.bm25_search(
                 session_name=session_name,
                 query=query,
                 get_docs_fn=get_docs_fn,
-                top_k=max(top_k, 4)
+                top_k=max(top_k * 2, 8)
             )
         except Exception:
             bm25_docs = []
@@ -191,7 +229,7 @@ class HybridSearchEngine:
 
         # 3. Reciprocal Rank Fusion
         if dense_docs and bm25_docs:
-            fused_docs = self.reciprocal_rank_fusion(dense_docs, bm25_docs, k=60, top_k=top_k)
+            fused_docs = self.reciprocal_rank_fusion(dense_docs, bm25_docs, k=60, top_k=top_k, query=query)
         elif dense_docs:
             fused_docs = dense_docs[:top_k]
         elif bm25_docs:
