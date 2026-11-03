@@ -1,7 +1,15 @@
 import sys
 import warnings
 
-warnings.simplefilter("ignore")
+# Clean terminal UI: Silence noisy internal framework deprecation notices
+warnings.filterwarnings("ignore")
+_orig_showwarning = warnings.showwarning
+def _clean_showwarning(message, category, filename, lineno, file=None, line=None):
+    msg_str = str(message)
+    if "Chroma" in msg_str or "langchain" in msg_str.lower() or "deprecated" in msg_str.lower():
+        return
+    _orig_showwarning(message, category, filename, lineno, file=file, line=line)
+warnings.showwarning = _clean_showwarning
 
 import questionary
 from rich.console import Console

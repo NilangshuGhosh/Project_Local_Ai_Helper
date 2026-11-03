@@ -11,6 +11,13 @@ from typing import List, Dict, Any, Optional
 
 # Suppress framework deprecation warnings for a clean CLI output
 warnings.filterwarnings("ignore")
+_orig_showwarning = warnings.showwarning
+def _clean_showwarning(message, category, filename, lineno, file=None, line=None):
+    msg_str = str(message)
+    if "Chroma" in msg_str or "langchain" in msg_str.lower() or "deprecated" in msg_str.lower():
+        return
+    _orig_showwarning(message, category, filename, lineno, file=file, line=line)
+warnings.showwarning = _clean_showwarning
 
 import chromadb
 from langchain_core.documents import Document
