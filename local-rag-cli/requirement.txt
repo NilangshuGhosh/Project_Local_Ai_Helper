@@ -218,3 +218,26 @@ Architecture & Implementation:
      chat session without dropping vector session context or conversation memory.
 3. Dynamic Health Verification (core/health.py):
    - Startup health checks adaptively verify that the active model is installed in Ollama.
+
+================================================================================
+PHASE 9: NATIVE WINDOWS FILE EXPLORER DIALOG & ZERO-TYPING DOCUMENT INGESTION
+================================================================================
+Motivation & Problem Solved:
+---------------------------
+Manual text entry of file paths (e.g., 'C:\Users\username\Downloads\Doc.pdf') is a
+major UX hurdle for non-technical users (legal, healthcare, HR). Typing paths invites
+typos, path-separator confusion (\ vs /), and requires users to manually copy/paste
+system paths.
+
+Architecture & Implementation (tui/menu.py):
+1. `pick_file_with_native_dialog()`:
+   - Uses Python's built-in `tkinter.filedialog` to invoke the native Windows Explorer window.
+   - Sets `-topmost = True` to bring the Explorer dialog above the terminal window.
+   - Preconfigures file filters for PDF, TXT, MD, and source code formats.
+   - Destroys the hidden Tk root immediately after selection, consuming 0 persistent RAM.
+2. Dual-Mode Selector in `handle_ingest()`:
+   - "Browse via Windows File Explorer (Recommended)": 1-click visual browsing.
+   - "Type / Paste File Path Manually": Retained for power users and headless setups.
+3. Cancellation & Fallback Handling:
+   - Closing the Explorer window cleanly cancels ingestion without crashing.
+   - Graceful fallback to text prompt if running on a headless or GUI-less server.

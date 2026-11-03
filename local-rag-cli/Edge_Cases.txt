@@ -11,3 +11,40 @@ is giving some extra info not present in pdf,in some cases I see it is giving mo
 expected answers.
 4)It is taking a good amount while ingesting a 5 page doc it was fast but
  reply is still a bit slow.
+5) Is the app taking the vector database totally in ram while the session is running,
+if so say the database now holds data of 25 sessions,if I open a session do the 
+vectored data of all will come to ram at once? What if a session name already exists ,how do this app then behaves?
+6)What if user go on opening and adding pdf's to multiple sessions,should all be in ram,
+or there will be eviction should it be handled by me or by the os of user's laptop?
+This app should also take care of memory as I mention that it should not be A
+case that it crashes the laptop.
+7)This app will be running on user laptop, may be their laptop have gpu(or may be not),
+will that be leveraged,if yes that how can it be identified,and how can we 
+provide better performance to those user's whose laptop is capable and 
+dynamically can give user the best performance based on their laptop's capability?(Minimum requirement is still a windows laptop and a cpu and a 8GB ram).
+8)How can I make this app such that users can download the app online say a executable app ,where the app can run on the user's 
+laptop without them requiring to know any code.Also there laptop may have not python or any 
+other such dependencies or packages or models,then how can my app run ,
+I have to make such a package,which will also give
+user minimum setup requirements,so it becomes easy for them to 
+download and use my app.Also there may be an issue of OS and compatiblity(like windows version 7+or below or mac or linux).
+How to address those issues (or should leave them with warning in download page that this app only valid for this os and this version). 
+9)• Context Continuity (High Value): Users often treat AI chats as dynamic knowledge bases. 
+If they ask an app to analyze a 200-page legal contract or textbook, they will
+ want to refer back to those summaries and insights days or weeks later without
+  re-uploading the file and re-typing questions.
+• Trust and Privacy Alignment: Because this is a local app, users expect data
+ privacy. Storing the history locally honors that privacy. However, the app
+  must make it explicitly clear that the history stays on their device.
+• Granular Control: The ideal UX provides an option to turn off history
+ (like an "Incognito Mode") or delete specific chat threads when dealing
+  with highly sensitive documents (e.g., medical records or financial audits).
+10)User now by hand types the pdf location,that is a bit of dangerous right,also it's
+not so user friendly.Also,our users are also non tech people say hr or
+ healthcare admistrator or like clerk,lawyer,defence attorney(that is why they are using
+ local ai explainer right).For them  a terminal based cli app is not easy to use
+rather a web based or say a desktop app based solution is better with a 
+ split screen view ,where they need not work on cli and actually gets a 
+ gui for everything,though we can make a separate version for that if you say it.
+Let's keep the cli version also,as it is also a solution.
+

@@ -54,12 +54,71 @@ def handle_list_sessions():
     )
 
 
+def pick_file_with_native_dialog() -> str:
+    """
+    Opens the native OS File Explorer dialog to allow the user to browse and select
+    a document visually without typing file paths by hand.
+    Falls back gracefully to manual text input if the GUI environment is unavailable.
+    """
+    selected_path = ""
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+
+        root = tk.Tk()
+        root.withdraw()
+        # Bring dialog to the front of Windows terminal
+        root.attributes("-topmost", True)
+        root.focus_force()
+
+        filetypes = [
+            ("All Supported Documents", "*.pdf;*.txt;*.md;*.py;*.cpp;*.c;*.h;*.hpp;*.js;*.ts;*.java;*.rs;*.go;*.html;*.json;*.csv"),
+            ("PDF Documents (*.pdf)", "*.pdf"),
+            ("Text & Markdown (*.txt, *.md)", "*.txt;*.md"),
+            ("Source Code (*.py, *.js, *.cpp, ...)", "*.py;*.js;*.ts;*.cpp;*.c;*.java;*.rs;*.go"),
+            ("All Files (*.*)", "*.*")
+        ]
+
+        selected_path = filedialog.askopenfilename(
+            title="Select Document to Ingest into Local AI Helper",
+            filetypes=filetypes
+        )
+        root.destroy()
+    except Exception:
+        selected_path = ""
+
+    return selected_path
+
+
 def handle_ingest(target_session: str = None):
     """
-    Ingests a new document, allowing the user to create a new session
-    or add to an existing multi-document session.
+    Ingests a new document, allowing the user to select via native Windows File Explorer
+    or manual path input, and create a new session or add to an existing multi-document session.
     """
-    file_path = questionary.path("Enter path to file (PDF, TXT, PY, CPP, JS, MD, etc.):").ask()
+    # Offer user choice between Native Explorer Dialog and Manual Typing
+    picker_mode = questionary.select(
+        "How would you like to select your document?",
+        choices=[
+            "Browse via Windows File Explorer (Recommended)",
+            "Type / Paste File Path Manually",
+            "< Cancel"
+        ]
+    ).ask()
+
+    if not picker_mode or picker_mode == "< Cancel":
+        return
+
+    file_path = ""
+    if picker_mode == "Browse via Windows File Explorer (Recommended)":
+        console.print("[dim cyan]Opening Windows File Explorer dialog...[/dim cyan]")
+        file_path = pick_file_with_native_dialog()
+        if not file_path:
+            console.print("[yellow]No file selected in File Explorer. Ingestion cancelled.[/yellow]\n")
+            return
+        console.print(f"[bold green]✔ Selected:[/bold green] [cyan]{file_path}[/cyan]")
+    else:
+        file_path = questionary.path("Enter path to file (PDF, TXT, PY, CPP, JS, MD, etc.):").ask()
+
     if not file_path or not os.path.exists(file_path):
         console.print("[red]Invalid file path or file does not exist.[/red]\n")
         return

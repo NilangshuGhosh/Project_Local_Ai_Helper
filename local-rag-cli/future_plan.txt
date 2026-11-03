@@ -150,4 +150,15 @@ Who actually benefits from this project? Why would someone use this instead of C
 3. **Step 3:** Implement BM25 lexical search and fuse with ChromaDB results using RRF.
 4. **Step 4:** Replace raw input loops in `tui/menu.py` with `rich` panels or `textual` for visual windowing.
 5. **Step 5:** Add a one-command system profiler (`main.py --benchmark`) that measures local CPU/RAM and recommends the optimal model and chunk settings.
+// This is on 3-11-2026 for V2:
+Step 1: Immediate UX Quick Wins (Zero architectural risk)
+  ├── 1.1: Native Windows File Picker (replace manual path typing with Windows Explorer window)
+  ├── 1.2: Persistent SQLite Chat History & /incognito toggle (resume chats across restarts)
+  └── 1.3: Hardware & GPU Profiler in startup health banner
 
+Step 2: Production Packaging & Executable
+  ├── 2.1: Standalone .exe build via PyInstaller (runs on any Windows 10/11 PC without Python)
+  └── 2.2: First-run bootstrap script (auto-detects Ollama, guides one-click model setup)
+
+Step 3: Visual Split-Screen Desktop / Web UI
+  └── 3.1: Dual-pane interface (Document Viewer + Chat + Click-to-Verify Citations)
