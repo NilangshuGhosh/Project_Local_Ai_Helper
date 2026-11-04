@@ -241,3 +241,32 @@ Architecture & Implementation (tui/menu.py):
 3. Cancellation & Fallback Handling:
    - Closing the Explorer window cleanly cancels ingestion without crashing.
    - Graceful fallback to text prompt if running on a headless or GUI-less server.
+
+================================================================================
+PHASE 10: ATOMIC INGESTION INTERRUPT (CTRL+C) ROLLBACK & STORAGE HYGIENE
+================================================================================
+Motivation & Problem Solved:
+---------------------------
+When a user ingests a large document (e.g., a 100-page PDF) and interrupts the
+operation midway using Ctrl+C (KeyboardInterrupt), standard Python `except Exception`
+blocks fail to catch it because `KeyboardInterrupt` inherits directly from
+`BaseException`. In naive RAG implementations, this leaves:
+1. Ghost SQLite collection records containing incomplete chunks.
+2. Orphaned segment binary folders taking up disk space without index mappings.
+3. Windows file locks on `chroma.sqlite3-wal` logs.
+
+Architecture & Implementation (core/database.py):
+1. `BaseException` Catch Block:
+   - Catches both standard errors and user interrupts (`KeyboardInterrupt`, `SystemExit`).
+2. Differential Atomic Rollback:
+   - If the interrupted ingestion was creating a new session: completely deletes the
+     partial collection from ChromaDB.
+   - If the interrupted ingestion was adding/updating an existing multi-file session:
+     selectively deletes any chunks matching `source_file` that were partially written.
+3. Deep Storage Hygiene:
+   - Calls `cleanup_orphaned_segments()` to physically erase untracked segment folders from disk.
+   - Executes `_vacuum_and_checkpoint()` to flush SQLite WAL buffers and reclaim disk space.
+   - Invalidates `hybrid_engine` in-memory BM25 index cache to prevent stale search hits.
+4. Clean UI Propagation:
+   - Re-raises `KeyboardInterrupt` after physical cleanup so the CLI UI can present
+     a graceful cancellation message without printing Python stack traces.

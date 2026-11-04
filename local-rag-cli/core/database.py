@@ -357,6 +357,15 @@ def ingest_document(file_path: str, session_name: str, splits) -> Dict[str, Any]
     replaced_chunks = 0
     status = "created"
 
+    # =========================================================================
+    # ATOMIC INGESTION EXECUTION & ROLLBACK SAFETY GUARD
+    # =========================================================================
+    # Why this block exists:
+    # If a user cancels ingestion midway via Ctrl+C (KeyboardInterrupt) or if an
+    # unexpected crash occurs during embedding generation, ChromaDB might leave
+    # partial embeddings or orphaned segment files on disk, bloating storage.
+    # Note: KeyboardInterrupt inherits from BaseException (NOT standard Exception),
+    # so catching BaseException is mandatory to guarantee 100% rollback on Ctrl+C.
     try:
         # If collection exists, check if this file was already ingested and purge stale chunks
         if not is_new_collection:
@@ -368,7 +377,7 @@ def ingest_document(file_path: str, session_name: str, splits) -> Dict[str, Any]
                 replaced_chunks = len(old_ids)
                 status = "updated"
 
-        # Index new splits
+        # Index new splits into ChromaDB vectorstore
         Chroma.from_documents(
             documents=splits,
             ids=chunk_ids,
@@ -386,16 +395,37 @@ def ingest_document(file_path: str, session_name: str, splits) -> Dict[str, Any]
             "replaced_chunks": replaced_chunks,
             "session_name": session_name
         }
-    except Exception as e:
-        if is_new_collection:
-            try:
+    except BaseException as e:
+        # ---------------------------------------------------------------------
+        # ROLLBACK CLEANUP:
+        # 1. If this was a new session, drop the entire partial collection.
+        # 2. If it was an existing session, remove any chunks from this file that
+        #    might have been partially written before the interruption occurred.
+        # 3. Clean orphaned segment folders and release Windows SQLite locks.
+        # ---------------------------------------------------------------------
+        try:
+            if is_new_collection:
                 client.delete_collection(session_name)
-                client.clear_system_cache()
-                client.close()
-            except Exception:
-                pass
-            cleanup_orphaned_segments()
-        raise RuntimeError(f"Ingestion failed: {e}") from e
+            else:
+                col = client.get_collection(session_name)
+                partial_match = col.get(where={"source_file": norm_path})
+                if partial_match.get("ids"):
+                    col.delete(ids=partial_match["ids"])
+            
+            client.clear_system_cache()
+            client.close()
+        except Exception:
+            pass
+
+        cleanup_orphaned_segments()
+        _vacuum_and_checkpoint()
+        hybrid_engine.invalidate(session_name)
+
+        # Re-raise KeyboardInterrupt so the caller UI can notify the user gracefully
+        if isinstance(e, KeyboardInterrupt):
+            raise KeyboardInterrupt("Ingestion was interrupted by user (Ctrl+C). Partial data rolled back.") from e
+
+        raise RuntimeError(f"Ingestion failed and was safely rolled back: {e}") from e
 
 
 def get_retriever(session_name: str, k: int = 8):
