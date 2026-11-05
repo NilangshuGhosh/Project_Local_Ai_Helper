@@ -313,6 +313,9 @@ Architecture & Implementation:
      * Turns are stored in RAM for multi-turn pronoun resolution during the active chat.
      * ZERO writes are made to `chat_history.sqlite3`.
      * Turning `/incognito` OFF resumes persistent disk logging without deleting ingested docs.
+     * Turning on incognito then -> once you exit a chat session to look for a different session or close the app
+     completelly then when you return to same chat session,the incognito mode will be gone
+     and will be reset to persistent chat.
 4. Paginated History Viewer (`/history` command):
    - Pulls all recorded turns for the session from SQLite.
    - Renders in pages of 5 turns with confirmation prompts to prevent terminal buffer flooding.

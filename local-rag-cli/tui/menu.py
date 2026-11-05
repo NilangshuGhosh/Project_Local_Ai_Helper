@@ -325,8 +325,16 @@ def handle_chat():
 
     while True:
         try:
-            prompt_prefix = "[bold yellow]You (Incognito):[/bold yellow] " if is_incognito else "You:"
-            query = questionary.text(prompt_prefix).ask()
+            if is_incognito:
+                prompt_prefix = "🕶  You (Incognito):"
+                incog_style = questionary.Style([
+                    ("qmark", "fg:#e5c07b bold"),
+                    ("question", "fg:#e5c07b bold"),
+                ])
+                query = questionary.text(prompt_prefix, style=incog_style).ask()
+            else:
+                prompt_prefix = "You:"
+                query = questionary.text(prompt_prefix).ask()
         except KeyboardInterrupt:
             console.print("\n[yellow]Exiting chat session.[/yellow]\n")
             break
