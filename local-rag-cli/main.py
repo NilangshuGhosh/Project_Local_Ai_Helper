@@ -16,6 +16,7 @@ from rich.console import Console
 
 from core.health import display_health_banner
 from core.config import get_active_model
+from core.database import cleanup_orphaned_segments
 from tui.menu import (
     handle_list_sessions,
     handle_ingest,
@@ -33,6 +34,9 @@ def main():
     console.print("\n[bold cyan]╔═══════════════════════════════════════════════╗[/bold cyan]")
     console.print("[bold cyan]║       Local RAG Knowledge Assistant          ║[/bold cyan]")
     console.print("[bold cyan]╚═══════════════════════════════════════════════╝[/bold cyan]\n")
+
+    # Silent startup hygiene sweep: scrubs any leftover binary fragments from abrupt closures
+    cleanup_orphaned_segments()
 
     # Run startup health check
     display_health_banner(console)
