@@ -101,13 +101,19 @@ def verify_system_readiness(base_url: str = OLLAMA_BASE_URL) -> Dict[str, Any]:
     }
 
 
+from core.hardware import get_system_hardware_info, evaluate_model_safety
+
+
 def display_health_banner(console: Console) -> bool:
     """
-    Displays a formatted status panel on startup.
+    Displays a formatted status panel on startup covering Ollama readiness,
+    host hardware specs (CPU/RAM/GPU), and active LLM safety evaluation.
     Returns True if system is completely ready, False otherwise.
     """
     status = verify_system_readiness()
     active_llm = get_active_model()
+    hw = get_system_hardware_info()
+    safety = evaluate_model_safety(active_llm, hw)
 
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column("Component", style="bold")
@@ -131,8 +137,15 @@ def display_health_banner(console: Console) -> bool:
     else:
         table.add_row(f"Active LLM ({active_llm})", "[bold red]NOT FOUND[/bold red]")
 
-    border_style = "green" if status["ready"] else "yellow"
-    title = "[bold green]System Health Check[/bold green]" if status["ready"] else "[bold yellow]System Health Alert[/bold yellow]"
+    # Hardware & Inference Profile rows
+    mem_avail_str = f"{hw['total_ram_gb']} GB RAM [dim](Available: {hw['available_ram_gb']} GB)[/dim]"
+    table.add_row("CPU & Memory", f"{hw['cpu_cores']} Cores | {mem_avail_str}")
+    table.add_row("Inference Device", f"[cyan]{hw['device_mode']}[/cyan]")
+    table.add_row("Hardware Profile", f"{hw['hardware_tier']} [dim]({hw['recommended_range']})[/dim]")
+    table.add_row("Active Model Fit", safety["badge"])
+
+    border_style = "green" if status["ready"] and safety["is_safe"] else "yellow"
+    title = "[bold green]System Health & Hardware Engine[/bold green]" if status["ready"] else "[bold yellow]System Health Alert[/bold yellow]"
 
     console.print(Panel(table, title=title, border_style=border_style, expand=False))
 
@@ -141,6 +154,12 @@ def display_health_banner(console: Console) -> bool:
         for issue in status["issues"]:
             console.print(f"  • {issue}")
         console.print()
+
+    # Proactive hardware warnings for tight memory or heavy models
+    if safety.get("warning"):
+        console.print(f"\n[bold yellow]Hardware Advisory for '{active_llm}':[/bold yellow]")
+        console.print(f"  • [yellow]{safety['warning']}[/yellow]")
+        console.print(f"  • [dim]Tip: You can switch to a faster CPU-safe model via the main menu.[/dim]\n")
 
     return status["ready"]
 

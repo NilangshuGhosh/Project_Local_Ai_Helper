@@ -328,3 +328,46 @@ Architecture & Implementation:
    - `/clear` purges both the active RAM buffer and persistent SQLite records for the session.
    - Deleting a session via `handle_delete()` or `delete_session()` cleanly drops all
      vector embeddings and executes `delete_session_chat_history()` to remove all SQLite rows.
+
+================================================================================
+PHASE 12: HARDWARE & INFERENCE PROFILING, GPU DISCOVERY & MODEL SAFETY CHECKS
+================================================================================
+Motivation & Problem Solved:
+---------------------------
+When running local AI models on consumer laptops, users often worry:
+1. "Can my computer run this model without freezing or crashing?"
+2. "Does the app know I have a GPU, or is it forcing CPU inference?"
+3. "Is it safe to switch to a bigger model (e.g., Phi-3 or Llama-3)?"
+
+Phase 12 introduces a zero-dependency, modular hardware profiling and safety engine
+that dynamically discovers CPU, RAM, and GPU capabilities and guides the user toward
+optimal models while preventing system thrashing or memory pressure.
+
+Architecture & Implementation:
+1. Zero-Dependency Hardware Probing (`core/hardware.py`):
+   - Fast RAM Query: Uses Windows native `ctypes.windll.kernel32.GlobalMemoryStatusEx`
+     to query exact Total Physical RAM and Available Physical RAM in <0.1ms.
+   - CPU & SIMD Vector Discovery: Uses `os.cpu_count()`, Windows Registry `ProcessorNameString`,
+     and Windows native `IsProcessorFeaturePresent` API (`kernel32`) to detect hardware vector
+     instruction sets (AVX-512 [PF 49], AVX2 [PF 40], AVX [PF 25]) with 0 spawned child processes.
+   - GPU & Inference Device Identification:
+     * Checks `nvidia-smi` for dedicated NVIDIA GPUs and extracts dedicated VRAM.
+     * When dedicated CUDA GPU is present: surfaces `CUDA GPU Offload [<GPU> (<VRAM>)]`.
+     * When integrated/no dedicated GPU is present: straightforwardly reports `CPU Inference (<SIMD> Vector Mode)`
+       rather than misleading the user with integrated display names that do not accelerate inference.
+   - In-memory caching: System hardware specs are cached in memory to ensure 0ms latency
+     during routine operations, with dynamic available RAM queried on demand.
+2. Hardware Tier Classification:
+   - Tier 1: Ultra-Light CPU (<8 GB RAM) -> Safe for 1B - 1.5B models (e.g. Qwen 2.5 1.5B).
+   - Tier 2: Balanced CPU (8 - 16 GB RAM) -> Optimized for 1.5B - 3.8B models (e.g. Qwen 2.5, Phi-3).
+   - Tier 3: Dedicated GPU (4GB+ VRAM) -> Recommended for 3B - 8B models with CUDA acceleration.
+3. Enhanced Startup Health Banner (`core/health.py`):
+   - Displays real-time CPU & Memory specs, detected Inference Device, and Active Model Fit badge.
+   - Surfaces proactive hardware advisories if available RAM is tight or if a heavy model is active.
+4. Hardware-Aware Model Switcher (`tui/menu.py`):
+   - Displays dynamic compatibility badges next to each candidate model in the selector:
+     * `[✔ Recommended for CPU • Fast & Light]`
+     * `[✔ Supported • High Reasoning • Moderate CPU Speed]`
+     * `[⚠️ Heavy on CPU • Slower Generation (~3 tok/s)]`
+   - Intercepts switches to resource-intensive models with an interactive confirmation warning
+     explaining expected latency or RAM pressure before applying the change.

@@ -154,7 +154,7 @@ Who actually benefits from this project? Why would someone use this instead of C
 Step 1: Immediate UX Quick Wins (Zero architectural risk)
   ├── 1.1: Native Windows File Picker (COMPLETED: 1-click Explorer dialog with hidden Tk root)
   ├── 1.2: Persistent SQLite Chat History & /incognito toggle (COMPLETED: Cold SQLite + Warm RAM buffer, /incognito, /export, /history pagination)
-  └── 1.3: Hardware & GPU Profiler in startup health banner
+  └── 1.3: Hardware & GPU Profiler in startup health banner (COMPLETED: core/hardware.py, GPU discovery, model safety scoring, switch confirmation)
 
 Step 2: Production Packaging & Executable
   ├── 2.1: Standalone .exe build via PyInstaller (runs on any Windows 10/11 PC without Python)

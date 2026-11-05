@@ -33,6 +33,7 @@ from core.history_db import (
     get_session_message_count,
     delete_session_chat_history,
 )
+from core.hardware import get_system_hardware_info, evaluate_model_safety
 
 console = Console()
 
@@ -684,14 +685,17 @@ def handle_storage_health():
 
 
 def handle_switch_model():
-    """Interactive selector to switch the active LLM between installed models at runtime."""
+    """Interactive selector to switch the active LLM between installed models at runtime with hardware safety evaluation."""
     active = get_active_model()
+    hw = get_system_hardware_info()
     
     choices = []
     for tag, info in SUPPORTED_MODELS.items():
         is_active = (tag == active)
         prefix = "★ [ACTIVE] " if is_active else "  "
-        title = f"{prefix}{info['name']} — {info['description']}"
+        safety = evaluate_model_safety(tag, hw)
+        badge = safety["menu_badge"]
+        title = f"{prefix}{info['name']} — {info['description']} {badge}"
         choices.append(questionary.Choice(title=title, value=tag))
 
     choices.append(questionary.Choice(title="< Cancel (Keep current)", value=None))
@@ -702,6 +706,15 @@ def handle_switch_model():
     ).ask()
 
     if selected and selected != active:
+        safety = evaluate_model_safety(selected, hw)
+        if safety["safety_level"] in ["CAUTION", "CRITICAL"]:
+            console.print(f"\n[bold yellow]⚠️ Hardware Notice for '{selected}':[/bold yellow]")
+            console.print(f"[yellow]{safety['warning']}[/yellow]\n")
+            confirm = questionary.confirm("Do you still want to switch to this model?", default=False).ask()
+            if not confirm:
+                console.print("[dim]Model switch cancelled.[/dim]\n")
+                return
+
         set_active_model(selected)
         console.print(f"[bold green]✔ Active AI Model switched to:[/bold green] [bold cyan]{selected}[/bold cyan]\n")
     elif selected == active:
