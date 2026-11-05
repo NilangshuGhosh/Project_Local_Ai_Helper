@@ -32,6 +32,7 @@ from core.history_db import (
     get_all_session_turns,
     get_session_message_count,
     delete_session_chat_history,
+    search_chat_history,
 )
 from core.hardware import get_system_hardware_info, evaluate_model_safety
 
@@ -244,10 +245,10 @@ def handle_manage_session_docs():
                 value=f["source_file"]
             )
             for f in files
-        ] + [questionary.Choice(title="< Cancel", value=None)]
+        ] + ["< Cancel"]
 
         target_file = questionary.select("Select file to remove:", choices=file_choices).ask()
-        if not target_file:
+        if not target_file or target_file == "< Cancel":
             return
 
         confirm = questionary.confirm(f"Remove '{os.path.basename(target_file)}' from session '{session_name}'?").ask()
@@ -273,14 +274,17 @@ def handle_manage_session_docs():
         handle_ingest(target_session=session_name)
 
 
-def handle_chat():
+def handle_chat(target_session: str = None):
     sessions = list_sessions()
     if not sessions:
         console.print("[yellow]No knowledge sessions available. Ingest a file first![/yellow]\n")
         return
 
-    choices = [s["name"] for s in sessions]
-    session_name = questionary.select("Select a session to chat with:", choices=choices).ask()
+    if target_session:
+        session_name = target_session
+    else:
+        choices = [s["name"] for s in sessions]
+        session_name = questionary.select("Select a session to chat with:", choices=choices).ask()
 
     if not session_name:
         return
@@ -351,7 +355,8 @@ def handle_chat():
                 "\n[bold cyan]Interactive Chat Commands:[/bold cyan]\n"
                 "  • [bold]/model[/bold]       : View or switch active LLM (e.g. Qwen 2.5 vs Phi-3)\n"
                 "  • [bold]/incognito[/bold]   : Toggle Incognito Mode ON/OFF (RAM-only, zero disk logging)\n"
-                "  • [bold]/history[/bold]     : View full paginated transcript of past questions & answers\n"
+                "  • [bold]/history[/bold]     : View bi-directional paginated transcript of past Q&A\n"
+                "  • [bold]/search <term>[/bold]: Search past interactions in this session or all sessions\n"
                 "  • [bold]/export[/bold]      : Export conversation transcript with sources to Markdown file\n"
                 "  • [bold]/sources[/bold]     : Re-display the verified sources table for the last answer\n"
                 "  • [bold]/source <N>[/bold]  : View the complete uncropped text and metadata of Source N\n"
@@ -463,7 +468,6 @@ def handle_chat():
         if cleaned_query.lower() == "/history":
             all_turns = get_all_session_turns(session_name)
             if not all_turns:
-                # Fallback to RAM turns
                 ram_turns = memory_manager.get_turns(session_name)
                 if not ram_turns:
                     console.print("[yellow]No conversation history in memory or on disk yet.[/yellow]\n")
@@ -473,22 +477,134 @@ def handle_chat():
                     for t in ram_turns
                 ]
 
-            console.print(f"\n[bold cyan]Full Conversation History for '{session_name}' ({len(all_turns)} total turns):[/bold cyan]")
-            # Paginated display in batches of 5
+            total_turns = len(all_turns)
             page_size = 5
-            for start_idx in range(0, len(all_turns), page_size):
-                page_slice = all_turns[start_idx:start_idx + page_size]
+            total_pages = max(1, (total_turns + page_size - 1) // page_size)
+            current_page = 1
+
+            while True:
+                start_idx = (current_page - 1) * page_size
+                end_idx = min(start_idx + page_size, total_turns)
+                page_slice = all_turns[start_idx:end_idx]
+
+                console.print(f"\n[bold cyan]Conversation History for '{session_name}' • Page {current_page} of {total_pages} (Turns {start_idx + 1} to {end_idx} of {total_turns}):[/bold cyan]")
                 for i, t in enumerate(page_slice, start_idx + 1):
                     t_time = t.get("timestamp", "")
                     console.print(f"[bold dim]── Turn {i} [{t_time}] ──[/bold dim]")
                     console.print(f"  [bold]User:[/bold] {t['user_query']}")
                     console.print(f"  [bold magenta]AI:[/bold magenta] {t['ai_response']}\n")
 
-                if start_idx + page_size < len(all_turns):
-                    cont = questionary.confirm("View next page of history?").ask()
-                    if not cont:
-                        break
+                if total_pages == 1:
+                    break
+
+                nav_choices = []
+                if current_page < total_pages:
+                    nav_choices.append(questionary.Choice(f"▶ Next Page ({current_page + 1}/{total_pages})", value="next"))
+                if current_page > 1:
+                    nav_choices.append(questionary.Choice(f"◀ Previous Page ({current_page - 1}/{total_pages})", value="prev"))
+                if total_pages > 1:
+                    nav_choices.append(questionary.Choice("🔢 Jump to Specific Page", value="jump"))
+                nav_choices.append(questionary.Choice("✖ Close History Viewer", value="exit"))
+
+                action = questionary.select(
+                    f"Navigate History (Page {current_page}/{total_pages} • Use ↑/↓ to choose):",
+                    choices=nav_choices
+                ).ask()
+
+                if not action or action == "exit":
+                    break
+                elif action == "next":
+                    current_page += 1
+                elif action == "prev":
+                    current_page -= 1
+                elif action == "jump":
+                    page_str = questionary.text(f"Enter page number (1 to {total_pages}):").ask()
+                    if page_str and page_str.isdigit():
+                        p = int(page_str)
+                        if 1 <= p <= total_pages:
+                            current_page = p
+                        else:
+                            console.print(f"[yellow]Page {p} is out of range.[/yellow]")
+
             console.print()
+            continue
+
+        if cleaned_query.lower().startswith("/search"):
+            # 1. First prompt user for search scope: Local session vs Global
+            scope_choice = questionary.select(
+                "Select Search Scope:",
+                choices=[
+                    f"Current Session Only ('{session_name}')",
+                    "Global Search (All Sessions Across Knowledge Vault)",
+                    "< Cancel"
+                ]
+            ).ask()
+
+            if not scope_choice or scope_choice == "< Cancel":
+                continue
+
+            target_scope = session_name if "Current Session" in scope_choice else None
+
+            # 2. Extract or prompt for search query
+            parts = cleaned_query.split(maxsplit=1)
+            search_term = parts[1].strip() if len(parts) > 1 else ""
+            if not search_term:
+                search_term = questionary.text("Enter search query or keyword:").ask()
+
+            if not search_term or not search_term.strip():
+                continue
+
+            with console.status(f"[cyan]Searching interactions for '{search_term}'...[/cyan]"):
+                results = search_chat_history(search_term, session_name=target_scope, limit=30)
+
+            if not results:
+                console.print(f"[yellow]No interactions found matching '{search_term}'.[/yellow]\n")
+                continue
+
+            # 3. Interactive selectable list to prevent terminal screen flooding
+            choices = []
+            for r in results:
+                s_name = r.get("session_name", "")
+                t_stamp = r.get("timestamp", "")
+                short_q = r["user_query"].replace("\n", " ").strip()
+                if len(short_q) > 60:
+                    short_q = short_q[:57] + "..."
+                display_title = f"[{s_name}] \"{short_q}\" — {t_stamp}"
+                choices.append(questionary.Choice(title=display_title, value=r))
+
+            choices.append(questionary.Choice(title="< Back to Chat", value=None))
+
+            selected_match = questionary.select(
+                f"Found {len(results)} match(es) for '{search_term}' (Select to view, ↑/↓ to scroll):",
+                choices=choices
+            ).ask()
+
+            if not selected_match or not isinstance(selected_match, dict):
+                continue
+
+            # Render selected match in a clean card
+            hit_session = selected_match.get("session_name", "")
+            t_stamp = selected_match.get("timestamp", "")
+            m_used = selected_match.get("model_used") or "Unknown"
+            srcs = selected_match.get("sources_summary") or "None"
+
+            panel_content = (
+                f"[bold cyan]Session:[/bold cyan] {hit_session} | [bold cyan]Timestamp:[/bold cyan] {t_stamp}\n"
+                f"[bold cyan]Model:[/bold cyan] `{m_used}` | [bold cyan]Sources:[/bold cyan] {srcs}\n\n"
+                f"[bold]User:[/bold] {selected_match['user_query']}\n\n"
+                f"[bold magenta]AI:[/bold magenta] {selected_match['ai_response']}"
+            )
+            console.print(Panel(panel_content, title=f"Match Details: {hit_session}", border_style="cyan"))
+
+            # If match came from another session (via Global Search), offer 1-click jump!
+            if hit_session != session_name:
+                jump_confirm = questionary.confirm(
+                    f"This interaction is from session '{hit_session}'. Jump to that session now?",
+                    default=False
+                ).ask()
+                if jump_confirm:
+                    handle_chat(target_session=hit_session)
+                    break
             continue
 
         if cleaned_query.lower() == "/sources":
@@ -698,24 +814,91 @@ def handle_switch_model():
         title = f"{prefix}{info['name']} — {info['description']} {badge}"
         choices.append(questionary.Choice(title=title, value=tag))
 
-    choices.append(questionary.Choice(title="< Cancel (Keep current)", value=None))
+    choices.append("< Cancel (Keep current)")
 
     selected = questionary.select(
         f"Select Active LLM Model (Currently: {active}):",
         choices=choices
     ).ask()
 
-    if selected and selected != active:
-        safety = evaluate_model_safety(selected, hw)
-        if safety["safety_level"] in ["CAUTION", "CRITICAL"]:
-            console.print(f"\n[bold yellow]⚠️ Hardware Notice for '{selected}':[/bold yellow]")
-            console.print(f"[yellow]{safety['warning']}[/yellow]\n")
-            confirm = questionary.confirm("Do you still want to switch to this model?", default=False).ask()
-            if not confirm:
-                console.print("[dim]Model switch cancelled.[/dim]\n")
-                return
+    if not selected or selected == "< Cancel (Keep current)" or selected == active:
+        if selected == active:
+            console.print(f"[dim]Model '{active}' is already active.[/dim]\n")
+        return
 
-        set_active_model(selected)
-        console.print(f"[bold green]✔ Active AI Model switched to:[/bold green] [bold cyan]{selected}[/bold cyan]\n")
-    elif selected == active:
-        console.print(f"[dim]Model '{active}' is already active.[/dim]\n")
+    safety = evaluate_model_safety(selected, hw)
+    if safety["safety_level"] in ["CAUTION", "CRITICAL"]:
+        console.print(f"\n[bold yellow]⚠️ Hardware Notice for '{selected}':[/bold yellow]")
+        console.print(f"[yellow]{safety['warning']}[/yellow]\n")
+        confirm = questionary.confirm("Do you still want to switch to this model?", default=False).ask()
+        if not confirm:
+            console.print("[dim]Model switch cancelled.[/dim]\n")
+            return
+
+    set_active_model(selected)
+    console.print(f"[bold green]✔ Active AI Model switched to:[/bold green] [bold cyan]{selected}[/bold cyan]\n")
+
+
+def handle_global_search():
+    """
+    Searches past chat interactions across all sessions.
+    Renders results in a fixed 8-item scrolling window (scrollable with ↑/↓)
+    and allows 1-click jump into the target session to continue chatting.
+    """
+    query = questionary.text("Enter keyword or question snippet to search across all sessions:").ask()
+    if not query or not query.strip():
+        return
+
+    with console.status("[cyan]Searching conversation transcripts across all sessions...[/cyan]"):
+        results = search_chat_history(query.strip(), limit=50)
+
+    if not results:
+        console.print(f"\n[yellow]No past interactions found matching '{query}'.[/yellow]\n")
+        return
+
+    console.print(f"\n[bold green]Found {len(results)} matching interaction(s) across all sessions:[/bold green]")
+
+    # Build selectable list with 8-item fixed scrolling window
+    choices = []
+    for r in results:
+        s_name = r.get("session_name", "Unknown")
+        t_stamp = r.get("timestamp", "")
+        short_q = r["user_query"].replace("\n", " ").strip()
+        if len(short_q) > 60:
+            short_q = short_q[:57] + "..."
+        display_title = f"[{s_name}] \"{short_q}\" — {t_stamp}"
+        choices.append(questionary.Choice(title=display_title, value=r))
+
+    choices.append(questionary.Choice(title="< Back to Main Menu", value=None))
+
+    selected_turn = questionary.select(
+        "Select an interaction to view full transcript & context (Scroll with ↑/↓):",
+        choices=choices
+    ).ask()
+
+    if not selected_turn or not isinstance(selected_turn, dict):
+        return
+
+    # Render full interaction details in a panel
+    target_session = selected_turn.get("session_name", "")
+    t_stamp = selected_turn.get("timestamp", "")
+    m_used = selected_turn.get("model_used") or "Unknown"
+    srcs = selected_turn.get("sources_summary") or "None"
+
+    panel_content = (
+        f"[bold cyan]Session Name:[/bold cyan] {target_session}\n"
+        f"[bold cyan]Timestamp:[/bold cyan] {t_stamp} | [bold cyan]Model:[/bold cyan] `{m_used}`\n"
+        f"[bold cyan]Sources:[/bold cyan] {srcs}\n\n"
+        f"[bold]User Question:[/bold]\n{selected_turn['user_query']}\n\n"
+        f"[bold magenta]AI Response:[/bold magenta]\n{selected_turn['ai_response']}"
+    )
+    console.print(Panel(panel_content, title=f"Transcript Match: {target_session}", border_style="cyan"))
+
+    # Offer 1-click jump to session
+    jump_confirm = questionary.confirm(
+        f"Jump into session '{target_session}' and continue chatting with this document?",
+        default=True
+    ).ask()
+
+    if jump_confirm:
+        handle_chat(target_session=target_session)

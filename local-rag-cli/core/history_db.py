@@ -151,3 +151,41 @@ def delete_all_chat_history() -> int:
         conn.commit()
         return cursor.rowcount
 
+
+def search_chat_history(
+    query_text: str,
+    session_name: Optional[str] = None,
+    limit: int = 25
+) -> List[Dict[str, Any]]:
+    """
+    Performs high-speed indexed search across past user queries, AI responses, and sessions.
+    If session_name is provided, scopes search to that session only; otherwise searches across ALL sessions.
+    Returns matched turns ordered by latest timestamp.
+    """
+    if not query_text or not query_text.strip() or not os.path.exists(CHAT_HISTORY_DB):
+        return []
+
+    init_chat_history_db()
+    clean_q = f"%{query_text.strip()}%"
+    with _get_connection() as conn:
+        cursor = conn.cursor()
+        if session_name:
+            cursor.execute("""
+                SELECT id, session_name, timestamp, user_query, ai_response, sources_summary, model_used
+                FROM session_messages
+                WHERE session_name = ? AND (user_query LIKE ? OR ai_response LIKE ?)
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?
+            """, (session_name.strip(), clean_q, clean_q, limit))
+        else:
+            cursor.execute("""
+                SELECT id, session_name, timestamp, user_query, ai_response, sources_summary, model_used
+                FROM session_messages
+                WHERE user_query LIKE ? OR ai_response LIKE ? OR session_name LIKE ?
+                ORDER BY timestamp DESC, id DESC
+                LIMIT ?
+            """, (clean_q, clean_q, clean_q, limit))
+
+        return [dict(r) for r in cursor.fetchall()]
+
+

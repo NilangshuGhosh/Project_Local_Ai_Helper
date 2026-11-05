@@ -25,6 +25,7 @@ from tui.menu import (
     handle_delete,
     handle_storage_health,
     handle_switch_model,
+    handle_global_search,
 )
 
 console = Console()
@@ -48,6 +49,7 @@ def main():
                 "What would you like to do?",
                 choices=[
                     "Chat with a Document",
+                    "Search Past Chats & Knowledge Across All Sessions",
                     "Ingest Document (New or Existing Session)",
                     "Manage Documents in a Session (Inspect / Remove / Add)",
                     "List Active Sessions",
@@ -63,6 +65,8 @@ def main():
 
         if action == "Chat with a Document":
             handle_chat()
+        elif action == "Search Past Chats & Knowledge Across All Sessions":
+            handle_global_search()
         elif action == "Ingest Document (New or Existing Session)":
             handle_ingest()
         elif action == "Manage Documents in a Session (Inspect / Remove / Add)":
