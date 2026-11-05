@@ -270,3 +270,58 @@ Architecture & Implementation (core/database.py):
 4. Clean UI Propagation:
    - Re-raises `KeyboardInterrupt` after physical cleanup so the CLI UI can present
      a graceful cancellation message without printing Python stack traces.
+
+================================================================================
+PHASE 11: PERSISTENT CONVERSATION HISTORY, INCOGNITO MODE & TRANSCRIPT EXPORT
+================================================================================
+Motivation & Problem Solved:
+---------------------------
+Previously, conversation memory lived solely in RAM (`core/memory.py`), meaning any
+terminal exit or session switch cleared the chat history. While this kept prompt prefill
+fast, users lost dialogue context when returning to a document session.
+Naively saving infinite conversation turns into the LLM context prompt causes latency
+to explode on local CPU inference.
+
+Phase 11 introduces a clean two-tier memory architecture:
+- Cold Storage (SQLite): Complete, persistent dialogue log on disk.
+- Warm Memory Buffer (RAM): Sliding window of the last 3 turns fed to the LLM.
+
+Architecture & Implementation:
+1. SQLite Chat Storage (`core/history_db.py`):
+   - Storage file: `chroma_db/chat_history.sqlite3` (isolated and gitignored).
+   - Table Schema:
+       chat_messages (
+           id INTEGER PRIMARY KEY AUTOINCREMENT,
+           session_name TEXT NOT NULL,
+           timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+           user_query TEXT NOT NULL,
+           ai_response TEXT NOT NULL,
+           sources_summary TEXT,
+           model_used TEXT
+       )
+   - Indexed on `(session_name, timestamp)` for sub-millisecond retrieval.
+   - WAL (Write-Ahead Logging) mode enabled for high-concurrency safety.
+2. Two-Tier Memory & Session Resumption (`tui/menu.py`):
+   - On opening a session, the assistant automatically retrieves the most recent 3
+     dialogue turns from SQLite and primes the RAM `ConversationMemoryManager`.
+   - Displays a brief summary of previous conversation history upon entering the session.
+   - LLM generation prompt stays under 1.5k tokens, preserving fast TTFT (<1.2s on CPU).
+3. Incognito Mode (`/incognito` command):
+   - In-chat toggle switching to RAM-only memory.
+   - In Incognito mode:
+     * User prompt changes to `You (Incognito): `.
+     * Turns are stored in RAM for multi-turn pronoun resolution during the active chat.
+     * ZERO writes are made to `chat_history.sqlite3`.
+     * Turning `/incognito` OFF resumes persistent disk logging without deleting ingested docs.
+4. Paginated History Viewer (`/history` command):
+   - Pulls all recorded turns for the session from SQLite.
+   - Renders in pages of 5 turns with confirmation prompts to prevent terminal buffer flooding.
+5. Desktop Transcript Export (`/export` command):
+   - Exports complete dialogue history (timestamps, queries, responses, sources, model used)
+     to a clean Markdown document (`.md`).
+   - Defaults to Windows Desktop (`~/Desktop/<session>_transcript_<timestamp>.md`).
+   - Offers 1-click folder selection via native Windows File Explorer dialog.
+6. Synchronized Deletion & Dual-Purge:
+   - `/clear` purges both the active RAM buffer and persistent SQLite records for the session.
+   - Deleting a session via `handle_delete()` or `delete_session()` cleanly drops all
+     vector embeddings and executes `delete_session_chat_history()` to remove all SQLite rows.

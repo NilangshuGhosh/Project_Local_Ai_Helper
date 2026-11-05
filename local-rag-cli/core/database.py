@@ -233,6 +233,13 @@ def delete_session(session_name: str) -> bool:
         client.delete_collection(session_name)
         hybrid_engine.invalidate(session_name)
         
+        # Purge persistent chat messages associated with this session
+        try:
+            from core.history_db import delete_session_chat_history
+            delete_session_chat_history(session_name)
+        except Exception:
+            pass
+        
         try:
             client.clear_system_cache()
             client.close()

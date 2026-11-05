@@ -23,8 +23,16 @@ from core.citations import (
     open_source_file_in_windows,
     display_full_source_detail,
 )
+import datetime
 from core.memory import memory_manager
 from core.config import SUPPORTED_MODELS, get_active_model, set_active_model
+from core.history_db import (
+    save_chat_turn,
+    get_recent_session_turns,
+    get_all_session_turns,
+    get_session_message_count,
+    delete_session_chat_history,
+)
 
 console = Console()
 
@@ -293,13 +301,32 @@ def handle_chat():
 
     retriever = get_retriever(session_name)
 
+    # -------------------------------------------------------------------------
+    # SESSION RESUMPTION: Load and display previous chat history if available
+    # -------------------------------------------------------------------------
+    recent_saved = get_recent_session_turns(session_name, limit=3)
+    total_saved = get_session_message_count(session_name)
+
+    if recent_saved:
+        console.print(f"\n[bold cyan]── Previous Conversation History ({total_saved} total messages on disk) ──[/bold cyan]")
+        for row in recent_saved:
+            time_str = row.get("timestamp", "")
+            console.print(f"[bold dim][{time_str}][/bold dim]")
+            console.print(f"  [bold]User:[/bold] {row['user_query']}")
+            console.print(f"  [bold magenta]AI:[/bold magenta] {row['ai_response']}")
+            # Pre-load into in-memory sliding buffer so follow-up pronouns work immediately
+            memory_manager.add_turn(session_name, row['user_query'], row['ai_response'])
+        console.print("[bold cyan]──────────────────────────────────────────────────────────────────[/bold cyan]\n")
+
     console.print(f"[bold green]Connected to session '{session_name}'.[/bold green] [dim](Type 'exit' to quit, '/help' for commands)[/dim]\n")
 
     last_retrieved_docs = []
+    is_incognito = False
 
     while True:
         try:
-            query = questionary.text("You:").ask()
+            prompt_prefix = "[bold yellow]You (Incognito):[/bold yellow] " if is_incognito else "You:"
+            query = questionary.text(prompt_prefix).ask()
         except KeyboardInterrupt:
             console.print("\n[yellow]Exiting chat session.[/yellow]\n")
             break
@@ -314,13 +341,104 @@ def handle_chat():
             console.print(
                 "\n[bold cyan]Interactive Chat Commands:[/bold cyan]\n"
                 "  • [bold]/model[/bold]       : View or switch active LLM (e.g. Qwen 2.5 vs Phi-3)\n"
+                "  • [bold]/incognito[/bold]   : Toggle Incognito Mode ON/OFF (RAM-only, zero disk logging)\n"
+                "  • [bold]/history[/bold]     : View full paginated transcript of past questions & answers\n"
+                "  • [bold]/export[/bold]      : Export conversation transcript with sources to Markdown file\n"
                 "  • [bold]/sources[/bold]     : Re-display the verified sources table for the last answer\n"
                 "  • [bold]/source <N>[/bold]  : View the complete uncropped text and metadata of Source N\n"
                 "  • [bold]/open <N>[/bold]    : Open Source N's file in your default Windows viewer\n"
-                "  • [bold]/history[/bold]     : View previous conversation turns in this session\n"
-                "  • [bold]/clear[/bold]       : Reset conversation memory for this session (start fresh topic)\n"
+                "  • [bold]/clear[/bold]       : Reset conversation memory (RAM & disk history for this session)\n"
                 "  • [bold]exit[/bold] or [bold]quit[/bold]: Return to the main menu\n"
             )
+            continue
+
+        if cleaned_query.lower() == "/incognito":
+            is_incognito = not is_incognito
+            if is_incognito:
+                console.print("\n[bold yellow]🕶  Incognito Mode is now ON.[/bold yellow] [dim]Conversations are kept strictly in RAM and will NOT be saved to disk.[/dim]\n")
+            else:
+                console.print("\n[bold green]🕶  Incognito Mode is now OFF.[/bold green] [dim]Persistent disk logging resumed.[/dim]\n")
+            continue
+
+        if cleaned_query.lower() == "/export":
+            export_turns = get_all_session_turns(session_name)
+            # If nothing in SQLite (e.g. incognito session), check memory manager
+            if not export_turns:
+                ram_turns = memory_manager.get_turns(session_name)
+                export_turns = [
+                    {
+                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "user_query": t.user_query,
+                        "ai_response": t.assistant_response,
+                        "sources_summary": "Active Session RAM",
+                        "model_used": get_active_model()
+                    }
+                    for t in ram_turns
+                ]
+
+            if not export_turns:
+                console.print("[yellow]No conversation messages to export yet.[/yellow]\n")
+                continue
+
+            desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
+            timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            default_filename = f"{session_name}_transcript_{timestamp_str}.md"
+            default_export_path = os.path.join(desktop_path, default_filename)
+
+            export_loc_choice = questionary.select(
+                "Export destination:",
+                choices=[
+                    f"Save to Windows Desktop ({default_filename})",
+                    "Choose Another Folder via File Explorer",
+                    "< Cancel"
+                ]
+            ).ask()
+
+            if not export_loc_choice or export_loc_choice == "< Cancel":
+                continue
+
+            final_save_path = default_export_path
+            if "Choose Another Folder" in export_loc_choice:
+                try:
+                    import tkinter as tk
+                    from tkinter import filedialog
+                    root = tk.Tk()
+                    root.withdraw()
+                    root.attributes("-topmost", True)
+                    chosen_dir = filedialog.askdirectory(title="Select Folder to Save Transcript")
+                    root.destroy()
+                    if chosen_dir:
+                        final_save_path = os.path.join(chosen_dir, default_filename)
+                except Exception:
+                    final_save_path = default_export_path
+
+            # Format Markdown document
+            md_lines = [
+                f"# Local AI Helper - Chat Transcript: {session_name}",
+                f"*Export Date:* {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"*Total Interactions:* {len(export_turns)}",
+                "",
+                "---",
+                ""
+            ]
+
+            for i, turn in enumerate(export_turns, 1):
+                t_stamp = turn.get("timestamp", "")
+                m_used = turn.get("model_used") or get_active_model()
+                srcs = turn.get("sources_summary", "")
+                md_lines.append(f"### Turn {i} ({t_stamp}) - Model: `{m_used}`")
+                md_lines.append(f"**User:** {turn['user_query']}\n")
+                md_lines.append(f"**AI:** {turn['ai_response']}\n")
+                if srcs:
+                    md_lines.append(f"> *Sources:* {srcs}\n")
+                md_lines.append("")
+
+            try:
+                with open(final_save_path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(md_lines))
+                console.print(f"[bold green]✔ Successfully exported transcript to:[/bold green] [cyan]{final_save_path}[/cyan]\n")
+            except Exception as e:
+                console.print(f"[red]Failed to export transcript: {e}[/red]\n")
             continue
 
         if cleaned_query.lower() == "/model":
@@ -328,24 +446,40 @@ def handle_chat():
             continue
 
         if cleaned_query.lower() == "/clear":
-            cleared = memory_manager.clear(session_name)
-            if cleared:
-                console.print("[bold green]✔ Conversation memory cleared for this session.[/bold green]\n")
-            else:
-                console.print("[dim]Conversation memory is already empty.[/dim]\n")
+            cleared_ram = memory_manager.clear(session_name)
+            cleared_db = delete_session_chat_history(session_name)
+            console.print(f"[bold green]✔ Conversation memory cleared for '{session_name}'.[/bold green] [dim](Purged RAM buffer & {cleared_db} disk records)[/dim]\n")
             continue
 
         if cleaned_query.lower() == "/history":
-            turns = memory_manager.get_turns(session_name)
-            if not turns:
-                console.print("[yellow]No conversation history in memory yet.[/yellow]\n")
-            else:
-                console.print(f"\n[bold cyan]Conversation History for '{session_name}' ({len(turns)} turns):[/bold cyan]")
-                for i, t in enumerate(turns, 1):
-                    console.print(f"[bold dim]Turn {i}:[/bold dim]")
-                    console.print(f"  [bold]User:[/bold] {t.user_query}")
-                    console.print(f"  [bold magenta]AI:[/bold magenta] {t.assistant_response}")
-                console.print()
+            all_turns = get_all_session_turns(session_name)
+            if not all_turns:
+                # Fallback to RAM turns
+                ram_turns = memory_manager.get_turns(session_name)
+                if not ram_turns:
+                    console.print("[yellow]No conversation history in memory or on disk yet.[/yellow]\n")
+                    continue
+                all_turns = [
+                    {"timestamp": "RAM buffer", "user_query": t.user_query, "ai_response": t.assistant_response}
+                    for t in ram_turns
+                ]
+
+            console.print(f"\n[bold cyan]Full Conversation History for '{session_name}' ({len(all_turns)} total turns):[/bold cyan]")
+            # Paginated display in batches of 5
+            page_size = 5
+            for start_idx in range(0, len(all_turns), page_size):
+                page_slice = all_turns[start_idx:start_idx + page_size]
+                for i, t in enumerate(page_slice, start_idx + 1):
+                    t_time = t.get("timestamp", "")
+                    console.print(f"[bold dim]── Turn {i} [{t_time}] ──[/bold dim]")
+                    console.print(f"  [bold]User:[/bold] {t['user_query']}")
+                    console.print(f"  [bold magenta]AI:[/bold magenta] {t['ai_response']}\n")
+
+                if start_idx + page_size < len(all_turns):
+                    cont = questionary.confirm("View next page of history?").ask()
+                    if not cont:
+                        break
+            console.print()
             continue
 
         if cleaned_query.lower() == "/sources":
@@ -431,9 +565,30 @@ def handle_chat():
                     gen_tok_per_sec = round(tokens / gen_time, 1)
                     console.print(f"\n[dim]({tokens} tokens • TTFT: {ttft}s • Generation: {gen_tok_per_sec} tok/s • Total: {total_s}s)[/dim]\n")
 
-            # Record turn in conversation memory if answer was generated
+            # -----------------------------------------------------------------
+            # RECORD TURN: Memory Buffer + SQLite Persistent Storage
+            # -----------------------------------------------------------------
             if full_answer.strip():
+                # 1. Always record in RAM buffer for active pronoun resolution
                 memory_manager.add_turn(session_name, query, full_answer)
+
+                # 2. Persist to SQLite ONLY if Incognito Mode is OFF
+                if not is_incognito:
+                    src_summaries = []
+                    for d in (context_docs or []):
+                        m = d.metadata or {}
+                        fn = m.get("file_name") or os.path.basename(m.get("source_file", "Doc"))
+                        pg = m.get("page")
+                        src_summaries.append(f"{fn} (p.{pg})" if pg else fn)
+                    
+                    sources_str = ", ".join(dict.fromkeys(src_summaries))
+                    save_chat_turn(
+                        session_name=session_name,
+                        user_query=query,
+                        ai_response=full_answer,
+                        sources_summary=sources_str,
+                        model_used=get_active_model()
+                    )
 
             # Render verified sources panel below response
             if context_docs:
