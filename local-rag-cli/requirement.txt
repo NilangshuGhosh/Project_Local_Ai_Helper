@@ -410,3 +410,25 @@ Architecture & Implementation:
      * `🔢 Jump to Specific Page`
      * `✖ Close History Viewer`
    - Smooth navigation using `↑`/`↓` and `Enter` with page boundary guards.
+
+================================================================================
+PHASE 14: ONE-CLICK WINDOWS LAUNCHER (RUN.BAT) & AUTO-DAEMON PRE-FLIGHT
+================================================================================
+Motivation & Problem Solved:
+---------------------------
+Running the CLI previously required manually opening a PowerShell terminal,
+remembering directory paths, activating virtual environments via PowerShell execution
+policies, and remembering to start the Ollama service beforehand.
+
+Phase 14 provides a zero-friction, 1-click Windows launcher (`run.bat`):
+- Pinned Working Directory: Uses `cd /d "%~dp0"` to guarantee correct relative path
+  resolution whether double-clicked from File Explorer, a Desktop shortcut, or a terminal.
+- Hermetic Python Detection: Automatically binds to `venv\Scripts\python.exe` without
+  touching system PATH or triggering PowerShell script execution restrictions.
+- Auto-Ollama Pre-flight: Probes `http://localhost:11434/api/tags` via native Windows `curl.exe`
+  in <50ms. If Ollama is sleeping, it silently launches `ollama serve` in the background
+  and waits for initialization before starting the TUI.
+- Error Pause Guard: If the application ever exits unexpectedly with a non-zero code,
+  it pauses the CMD window so stack traces can be read instead of instantly closing.
+- Hot-Reloading / Zero-Rebuild: Directly runs `main.py`, so any code edits across the
+  application take effect immediately upon the next click with 0 build steps.
