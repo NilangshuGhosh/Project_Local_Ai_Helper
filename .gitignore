@@ -19,3 +19,7 @@ chroma_db/
 # Operating system artifacts
 .DS_Store
 Thumbs.db
+
+# PyInstaller build artifacts
+build/
+**/build/

@@ -159,7 +159,7 @@ Step 1: Immediate UX Quick Wins (Zero architectural risk)
 
 Step 2: Production Packaging & Executable
   ├── 2.1: One-Click Windows Launcher run.bat (COMPLETED: directory pinning, auto-Ollama preflight, error pause guard)
-  ├── 2.2: Standalone .exe build via PyInstaller (runs on any Windows 10/11 PC without Python)
+  ├── 2.2: Standalone .exe build via PyInstaller (COMPLETED: single ~88MB binary, embedded Python 3.13 runtime, Chroma migrations, UTF-8 console hardening)
   └── 2.3: First-run bootstrap script (auto-detects Ollama, guides one-click model setup)
 
 Step 3: Visual Split-Screen Desktop / Web UI

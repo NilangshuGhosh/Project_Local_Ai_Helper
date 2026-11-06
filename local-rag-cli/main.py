@@ -1,5 +1,15 @@
+import os
 import sys
 import warnings
+
+# Ensure UTF-8 output encoding and ANSI terminal support on Windows to prevent charmap UnicodeEncodeErrors
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    os.system("")  # Enable VT100 / ANSI escape sequences
 
 # Clean terminal UI: Silence noisy internal framework deprecation notices
 warnings.filterwarnings("ignore")

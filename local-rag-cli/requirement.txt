@@ -432,3 +432,39 @@ Phase 14 provides a zero-friction, 1-click Windows launcher (`run.bat`):
   it pauses the CMD window so stack traces can be read instead of instantly closing.
 - Hot-Reloading / Zero-Rebuild: Directly runs `main.py`, so any code edits across the
   application take effect immediately upon the next click with 0 build steps.
+
+================================================================================
+PHASE 15: STANDALONE WINDOWS EXECUTABLE (LOCALAIHELPER.EXE) & EMBEDDED RUNTIME
+================================================================================
+Motivation & Problem Solved:
+---------------------------
+Shipping a production AI application to non-technical users or locked-down corporate
+workstations is notoriously difficult when relying on Python:
+1. Target machines frequently lack Python or have incompatible legacy versions installed.
+2. System path conflicts, execution policy locks (Restricted ExecutionPolicy in PowerShell),
+   and missing C++ build tools break dependencies like ChromaDB/hnswlib.
+3. Users should not need to use terminals, virtual environments, or `pip install`.
+
+Phase 15 provides an enterprise-grade, standalone Windows executable (`LocalAIHelper.exe`):
+- Single-Binary Distribution (`--onefile`):
+  Bundles the entire Python 3.13 runtime, native Windows C-extensions, ChromaDB engine,
+  LangChain framework, Rich TUI, and SQLite database drivers into a single ~88 MB binary.
+- Embedded ChromaDB Migrations & Schemas:
+  Includes ChromaDB SQLite migrations (`collect_data_files('chromadb')`), preventing
+  runtime table initialization crashes on fresh target systems.
+- Dynamic LangChain Module Discovery:
+  Bundles lazy-loaded internal submodules (`collect_submodules('langchain_classic')`,
+  `collect_submodules('langchain_ollama')`, `collect_submodules('langchain_core')`,
+  and `collect_submodules('langchain_text_splitters')`).
+- Portable Working Directory Resolution:
+  In `core/config.py`, dynamically resolves storage directories using `getattr(sys, 'frozen', False)`:
+  * When running as an `.exe`, resolves `./chroma_db/` and `chat_history.sqlite3` in the
+    exact folder where `LocalAIHelper.exe` is placed.
+  * Preserves full multi-session persistence, document indexation, and incognito logs side-by-side.
+- Universal Console & Unicode Hardening:
+  Automatically reconfigures standard I/O to UTF-8 (`errors='replace'`) and initialises VT100
+  ANSI terminal sequences at launch, guaranteeing box-drawing borders, badges, and emojis
+  render without Windows legacy `cp1252` charmap crashes.
+- Zero-Dependency Execution:
+  Users download `LocalAIHelper.exe`, double-click it directly from Windows Explorer, and
+  start chatting immediately with their local documents. The only prerequisite is Ollama.

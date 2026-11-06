@@ -1,6 +1,13 @@
 import os
+import sys
 
-DB_DIR = os.path.abspath("./chroma_db")
+# Frozen binary path resolution for PyInstaller standalone executable
+if getattr(sys, "frozen", False):
+    APP_ROOT = os.path.dirname(sys.executable)
+else:
+    APP_ROOT = os.path.abspath(".")
+
+DB_DIR = os.path.join(APP_ROOT, "chroma_db")
 CHAT_HISTORY_DB = os.path.join(DB_DIR, "chat_history.sqlite3")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 EMBEDDING_MODEL = "nomic-embed-text"
