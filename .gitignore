@@ -23,3 +23,5 @@ Thumbs.db
 # PyInstaller build artifacts
 build/
 **/build/
+dist/
+**/dist/
